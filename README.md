@@ -82,12 +82,6 @@ This repository contains a **Minimum Viable Prototype (MVP)** that demonstrates:
 
 ---
 
-## 👥 Team
-
-Developed as part of **Hack4Delhi**  
-Focused on realistic, explainable, and deployable public-sector AI solutions.
-
----
 
 ### ⭐ Final Note
 
