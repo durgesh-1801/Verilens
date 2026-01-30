@@ -295,7 +295,7 @@ if upload_option == "📊 Upload CSV/Excel File":
                     st.session_state.detection_run = False
                     
                     st.success(f"✅ Loaded **{len(df)}** rows × **{len(df.columns)}** columns")
-                    st.balloons()
+                    
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
 
@@ -351,7 +351,7 @@ elif upload_option == "🔄 Generate Sample Data":
             st.session_state.detection_run = False
             
             st.success(f"✅ Generated **{len(df)}** transactions with ~**{anomaly_rate}%** anomalies")
-            st.balloons()
+            
 
 # ==========================================
 # DATA PREVIEW
