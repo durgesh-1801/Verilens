@@ -351,7 +351,6 @@ elif upload_option == "🔄 Generate Sample Data":
             st.session_state.detection_run = False
             
             st.success(f"✅ Generated **{len(df)}** transactions with ~**{anomaly_rate}%** anomalies")
-            
 
 # ==========================================
 # DATA PREVIEW
