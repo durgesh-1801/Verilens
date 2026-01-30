@@ -1,6 +1,6 @@
 """
 AI Fraud & Anomaly Detection System
-Enhanced Professional UI/UX Version
+Enhanced Professional UI/UX Version - Final
 """
 
 import streamlit as st
@@ -225,19 +225,21 @@ st.markdown("""
         font-size: 1.1rem;
     }
     
-    /* Metric Cards - Enhanced */
+    /* Metric Cards - Enhanced with Gradient Background */
     .metric-container {
-        background: white;
+        background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
         padding: 20px;
         border-radius: 12px;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
         transition: all 0.3s ease;
-        border: 1px solid #e2e8f0;
+        border: 1px solid rgba(102, 126, 234, 0.2);
     }
     
     .metric-container:hover {
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.15);
         transform: translateY(-4px);
+        background: linear-gradient(135deg, #f0f4ff 0%, #e8f0ff 100%);
+        border-color: rgba(102, 126, 234, 0.4);
     }
     
     /* Data Table Styling */
@@ -685,7 +687,6 @@ if upload_option == "📊 Upload CSV/Excel File":
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        
                     except Exception as e:
                         st.markdown(f"""
                         <div class="warning-box">
@@ -791,7 +792,6 @@ elif upload_option == "🔄 Generate Sample Dataset":
                     🎲 Random seed: {random_seed}
                 </div>
                 """, unsafe_allow_html=True)
-                st.balloons()
 
 # ==========================================
 # DATA PREVIEW SECTION
