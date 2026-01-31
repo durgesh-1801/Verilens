@@ -227,12 +227,100 @@ st.markdown("---")
 # ==========================================
 # DATA UPLOAD (LOGIC UNCHANGED)
 # ==========================================
+# ==========================================
+# DATA UPLOAD SECTION (FIXED)
+# ==========================================
 st.header("📁 Data Upload")
+
 upload_option = st.radio(
     "Choose data source:",
     ["📊 Upload CSV/Excel File", "🔄 Generate Sample Data"],
     horizontal=True
 )
+
+# ==========================================
+# CSV / EXCEL UPLOAD (FIXED)
+# ==========================================
+if upload_option == "📊 Upload CSV/Excel File":
+    st.markdown("""
+    <div class="upload-section">
+        <h4>📊 CSV / Excel Data Upload</h4>
+        <p>Upload transaction data in CSV or Excel format</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "Browse files",
+        type=["csv", "xlsx", "xls"],
+        help="Supported formats: CSV, XLSX, XLS"
+    )
+
+    if uploaded_file is not None:
+        st.markdown(f"**📄 File:** {uploaded_file.name}")
+
+        with st.expander("⚙️ Import Options"):
+            col1, col2 = st.columns(2)
+            with col1:
+                delimiter = st.selectbox("Delimiter (CSV)", [",", ";", "\t", "|"])
+            with col2:
+                encoding = st.selectbox("Encoding", ["utf-8", "latin-1", "cp1252"])
+
+        if st.button("📥 Load Data", type="primary", use_container_width=True):
+            with st.spinner("Loading data..."):
+                try:
+                    if uploaded_file.name.endswith(".csv"):
+                        try:
+                            df = pd.read_csv(uploaded_file, delimiter=delimiter, encoding=encoding)
+                        except:
+                            uploaded_file.seek(0)
+                            df = pd.read_csv(uploaded_file, encoding="latin-1")
+                    else:
+                        df = pd.read_excel(uploaded_file)
+
+                    st.session_state.data = df
+                    st.session_state.original_data = df.copy()
+                    st.session_state.data_source = "Uploaded File"
+                    st.session_state.data_filename = uploaded_file.name
+                    st.session_state.anomaly_count = 0
+                    st.session_state.alerts = []
+                    st.session_state.detection_run = False
+
+                    st.success(f"✅ Loaded {len(df)} rows × {len(df.columns)} columns")
+
+                except Exception as e:
+                    st.error(f"❌ Error loading file: {e}")
+
+# ==========================================
+# SAMPLE DATA GENERATION (UNCHANGED)
+# ==========================================
+elif upload_option == "🔄 Generate Sample Data":
+    st.markdown("""
+    <div class="upload-section">
+        <h4>🔄 Generate Sample Data</h4>
+        <p>Create realistic transaction data with embedded anomalies</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        n_samples = st.slider("Number of transactions", 100, 5000, 1000, 100)
+    with col2:
+        anomaly_rate = st.slider("Anomaly rate (%)", 5, 30, 10)
+    with col3:
+        random_seed = st.number_input("Random seed", 1, 9999, 42)
+
+    if st.button("🔄 Generate Sample Data", type="primary", use_container_width=True):
+        with st.spinner("Generating data..."):
+            df = generate_sample_data(n_samples, anomaly_rate, random_seed)
+            st.session_state.data = df
+            st.session_state.original_data = df.copy()
+            st.session_state.data_source = "Sample Data"
+            st.session_state.data_filename = "generated_sample.csv"
+            st.session_state.anomaly_count = 0
+            st.session_state.alerts = []
+            st.session_state.detection_run = False
+
+            st.success(f"✅ Generated {len(df)} records with ~{anomaly_rate}% anomalies")
 
 # (Rest of your logic remains exactly the same)
 # 🔒 No backend or flow was changed
