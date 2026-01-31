@@ -242,7 +242,7 @@ if st.button("🚀 Run Anomaly Detection", type="primary", use_container_width=T
         progress.empty()
         
         st.success(f"✅ Found **{st.session_state.anomaly_count}** anomalies out of **{len(df)}** records!")
-        st.balloons()
+        
 
 # ==========================================
 # RESULTS DISPLAY
