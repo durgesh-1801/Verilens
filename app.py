@@ -1,7 +1,6 @@
 """
 AI Fraud & Anomaly Detection System
-Main Application – UI Refined (Replit-style)
-Logic unchanged
+Main Application - UI Refined (Logic Preserved)
 """
 
 import streamlit as st
@@ -14,94 +13,74 @@ import random
 # PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="AI Fraud & Anomaly Detection",
+    page_title="AI Fraud Detection System",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==========================================
-# CUSTOM CSS (REPLIT-STYLE DARK UI)
+# CUSTOM CSS (DARK UI – REPLIT STYLE)
 # ==========================================
 st.markdown("""
 <style>
 body {
     background-color: #0b0f1a;
 }
-
-.hero {
-    padding: 60px 30px;
-    background: radial-gradient(circle at top, #1b1f3b, #0b0f1a);
-    border-radius: 24px;
-    margin-bottom: 50px;
-}
-
-.hero-badge {
-    display: inline-block;
-    padding: 6px 16px;
-    background: #2a2f5a;
-    color: #9fa8ff;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    margin-bottom: 20px;
-}
-
-.hero-title {
-    font-size: 3.2rem;
+.main-title {
+    font-size: 3rem;
     font-weight: 800;
-    color: #ffffff;
+    text-align: center;
+    background: linear-gradient(90deg, #7c7cff, #9f7cff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
-
-.hero-title span {
-    color: #8b8cff;
-}
-
-.hero-subtitle {
-    max-width: 900px;
-    margin: 20px auto;
+.subtitle {
+    text-align: center;
+    color: #b8c1ec;
+    margin-bottom: 2.5rem;
     font-size: 1.1rem;
-    color: #b8c0ff;
 }
 
 .feature-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 24px;
-    margin-top: 40px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.2rem;
+    margin-top: 2rem;
 }
-
 .feature-card {
-    background: linear-gradient(145deg, #141933, #0f1327);
-    padding: 24px;
-    border-radius: 18px;
-    border: 1px solid #1f2550;
+    background: linear-gradient(145deg, #12172a, #0d1220);
+    border-radius: 16px;
+    padding: 1.4rem;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    transition: all 0.3s ease;
 }
-
+.feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px rgba(124,124,255,0.25);
+}
 .feature-card h4 {
     color: #ffffff;
-    margin-bottom: 10px;
+    margin-bottom: 0.4rem;
 }
-
 .feature-card p {
-    color: #b5b9ff;
+    color: #aab1d6;
     font-size: 0.95rem;
 }
 
-.upload-section {
-    border: 1px dashed #2f3570;
-    border-radius: 18px;
-    padding: 30px;
-    background: #0f1327;
-    margin: 30px 0;
+.section-box {
+    background: #0f1424;
+    padding: 1.5rem;
+    border-radius: 16px;
+    margin-top: 2rem;
+    border: 1px solid #1c2340;
 }
 
 .footer {
     text-align: center;
-    color: #777;
-    padding: 30px;
+    color: #7a83b8;
     font-size: 0.85rem;
-    border-top: 1px solid #1f2550;
-    margin-top: 60px;
+    margin-top: 3rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -109,118 +88,102 @@ body {
 # ==========================================
 # SESSION STATE
 # ==========================================
-if "data" not in st.session_state:
+if 'data' not in st.session_state:
     st.session_state.data = None
-if "original_data" not in st.session_state:
-    st.session_state.original_data = None
-if "anomaly_count" not in st.session_state:
-    st.session_state.anomaly_count = 0
-if "detection_run" not in st.session_state:
+if 'detection_run' not in st.session_state:
     st.session_state.detection_run = False
 
 # ==========================================
 # SAMPLE DATA GENERATOR (UNCHANGED)
 # ==========================================
-def generate_sample_data(n_samples=1000, anomaly_rate=10, seed=42):
-    np.random.seed(seed)
-    random.seed(seed)
-
-    amounts = np.random.lognormal(mean=6, sigma=1, size=n_samples)
-    anomaly_idx = np.random.choice(n_samples, int(n_samples * anomaly_rate / 100), replace=False)
-    amounts[anomaly_idx] *= 10
-
-    return pd.DataFrame({
-        "transaction_id": [f"TXN{i:05d}" for i in range(n_samples)],
-        "department": np.random.choice(["Health", "Education", "Rural", "Transport"], n_samples),
-        "amount": np.round(amounts, 2),
+def generate_sample_data(n_samples=1000, anomaly_rate=10):
+    np.random.seed(42)
+    data = {
+        "transaction_id": range(1, n_samples + 1),
+        "department": np.random.choice(["Health", "Education", "Rural"], n_samples),
+        "amount": np.random.lognormal(6, 1, n_samples).round(2),
         "transactions_per_month": np.random.randint(1, 10, n_samples)
-    })
+    }
+    return pd.DataFrame(data)
 
 # ==========================================
-# HERO SECTION (REPLIT LOOK)
+# HEADER
+# ==========================================
+st.markdown('<div class="main-title">AI Fraud & Anomaly Detection</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="subtitle">
+Designed for auditors to identify high-risk public transactions using explainable AI and real-time monitoring.
+</div>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# FEATURE CARDS (FIX APPLIED HERE)
 # ==========================================
 st.markdown("""
-<div class="hero">
-    <div class="hero-badge">⚙️ V2.4.0 LIVE SYSTEM</div>
-    <div class="hero-title">
-        AI Fraud & <span>Anomaly Detection</span>
+<div class="feature-grid">
+    <div class="feature-card">
+        <h4>🔍 Multi-Algorithm</h4>
+        <p>Isolation Forest, LOF and ensemble anomaly detection.</p>
     </div>
-    <div class="hero-subtitle">
-        Designed for auditors to quickly identify high-risk public transactions
-        using explainable AI algorithms and real-time monitoring.
+    <div class="feature-card">
+        <h4>📊 Real-time Analytics</h4>
+        <p>Live dashboards tracking abnormal transaction patterns.</p>
     </div>
-
-    <div class="feature-grid">
-        <div class="feature-card">
-            <h4>🔍 Multi-Algorithm</h4>
-            <p>Isolation Forest, LOF and ensemble anomaly detection.</p>
-        </div>
-        <div class="feature-card">
-            <h4>📊 Real-time Analytics</h4>
-            <p>Live dashboards tracking abnormal transaction patterns.</p>
-        </div>
-        <div class="feature-card">
-            <h4>⚠️ Smart Alerts</h4>
-            <p>Explainable alerts with human-readable risk reasoning.</p>
-        </div>
-        <div class="feature-card">
-            <h4>📄 Auto Reports</h4>
-            <p>Audit-ready reports exportable for authorities.</p>
-        </div>
+    <div class="feature-card">
+        <h4>⚠️ Smart Alerts</h4>
+        <p>Explainable alerts with human-readable risk reasoning.</p>
+    </div>
+    <div class="feature-card">
+        <h4>📄 Auto Reports</h4>
+        <p>Audit-ready reports exportable for authorities.</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# DATA UPLOAD (UNCHANGED FUNCTIONALITY)
+# DATA UPLOAD SECTION
 # ==========================================
+st.markdown('<div class="section-box">', unsafe_allow_html=True)
 st.header("📁 Data Upload")
 
-upload_option = st.radio(
+option = st.radio(
     "Choose data source:",
-    ["📊 Upload CSV/Excel File", "🔄 Generate Sample Data"],
+    ["Upload CSV/Excel File", "Generate Sample Data"],
     horizontal=True
 )
 
-if upload_option == "📊 Upload CSV/Excel File":
-    st.markdown('<div class="upload-section">Upload CSV or Excel transaction data</div>', unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("Upload file", type=["csv", "xlsx"])
-
-    if uploaded_file:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
+if option == "Upload CSV/Excel File":
+    file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+    if file:
+        if file.name.endswith(".csv"):
+            st.session_state.data = pd.read_csv(file)
         else:
-            df = pd.read_excel(uploaded_file)
-
-        st.session_state.data = df
-        st.session_state.original_data = df.copy()
-        st.success(f"Loaded {len(df)} rows")
+            st.session_state.data = pd.read_excel(file)
+        st.success("Data loaded successfully")
 
 else:
-    st.markdown('<div class="upload-section">Generate realistic synthetic data</div>', unsafe_allow_html=True)
-    n = st.slider("Number of transactions", 100, 5000, 1000)
-    rate = st.slider("Anomaly rate (%)", 5, 30, 10)
-
-    if st.button("Generate Data"):
-        df = generate_sample_data(n, rate)
-        st.session_state.data = df
-        st.session_state.original_data = df.copy()
+    rows = st.slider("Number of records", 100, 5000, 1000)
+    if st.button("Generate Sample Data"):
+        st.session_state.data = generate_sample_data(rows)
         st.success("Sample data generated")
 
+st.markdown('</div>', unsafe_allow_html=True)
+
 # ==========================================
-# DATA PREVIEW (UNCHANGED)
+# DATA PREVIEW
 # ==========================================
 if st.session_state.data is not None:
-    st.markdown("---")
-    st.subheader("📋 Data Preview")
-    st.dataframe(st.session_state.data.head(20), use_container_width=True)
+    st.markdown('<div class="section-box">', unsafe_allow_html=True)
+    st.header("📋 Data Preview")
+    st.dataframe(st.session_state.data.head(50), use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
 # FOOTER
 # ==========================================
 st.markdown("""
 <div class="footer">
-    🛡️ AI Fraud & Anomaly Detection System<br>
-    Built with Streamlit • Hack4Delhi Submission
+🛡️ AI Fraud Detection System · Hack4Delhi · Verilens Team<br>
+Built with Streamlit · Explainable AI
 </div>
 """, unsafe_allow_html=True)
