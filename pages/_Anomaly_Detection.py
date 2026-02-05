@@ -372,7 +372,7 @@ if 'is_anomaly' in df.columns:
             anomaly_df = anomaly_df[display_cols]
         
         st.dataframe(
-            anomaly_df.head(20).style.background_gradient(subset=['anomaly_score'] if 'anomaly_score' in anomaly_df.columns else [], cmap='Reds'),
+            anomaly_df.head(20),
             use_container_width=True
         )
         
