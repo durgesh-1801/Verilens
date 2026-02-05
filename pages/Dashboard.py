@@ -229,13 +229,25 @@ if date_col and 'is_anomaly' in filtered_analytics_df.columns and len(filtered_a
         
         # Count high and medium risk by period
         if 'anomaly_score' in trend_df.columns:
-            risk_trend = trend_df[trend_df['is_anomaly'] == -1].groupby('period').apply(
-                lambda x: pd.Series({
-                    'High Risk': len(x[x['anomaly_score'] > 0.8]),
-                    'Medium Risk': len(x[(x['anomaly_score'] > 0.5) & (x['anomaly_score'] <= 0.8)]),
-                    'Total Risk': len(x)
-                })
-            ).reset_index()
+            risk_only = trend_df[trend_df['is_anomaly'] == -1]
+
+            risk_trend = (
+                risk_only.groupby('period')
+                .agg(
+                    High_Risk=('anomaly_score', lambda x: (x > 0.8).sum()),
+                    Medium_Risk=('anomaly_score', lambda x: ((x > 0.5) & (x <= 0.8)).sum()),
+                    Total_Risk=('anomaly_score', 'count')
+                )
+                .reset_index()
+            )
+
+            # Rename to keep your existing chart logic unchanged
+            risk_trend = risk_trend.rename(columns={
+                'High_Risk': 'High Risk',
+                'Medium_Risk': 'Medium Risk',
+                'Total_Risk': 'Total Risk'
+            })
+
         else:
             risk_trend = trend_df[trend_df['is_anomaly'] == -1].groupby('period').size().reset_index(name='Total Risk')
             risk_trend['High Risk'] = risk_trend['Total Risk'] * 0.4
