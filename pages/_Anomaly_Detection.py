@@ -8,6 +8,19 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
 import time
+from datetime import datetime
+import database
+
+# Authentication check
+if not st.session_state.get('authenticated'):
+    st.error("🔒 Access Denied - Please login first")
+    
+    if st.button("🔐 Go to Login"):
+        st.switch_page("pages/_Login.py")
+    
+    st.stop()
+# ========== END AUTHENTICATION CHECK ==========
+
 
 st.set_page_config(page_title="Anomaly Detection", page_icon="🔍", layout="wide")
 
@@ -263,6 +276,37 @@ if st.button("🔍 Run AI Risk Scan", type="primary", use_container_width=True):
                 reasons.append("")
         
         df['ai_reason'] = reasons
+        for _, row in df.iterrows():
+
+            severity = None
+            if row['is_anomaly'] == -1:
+                if row['anomaly_score'] > 0.8:
+                    severity = 'high'
+                elif row['anomaly_score'] > 0.5:
+                    severity = 'medium'
+                else:
+                    severity = 'low'
+
+            raw_id = row.get("transaction_id", row.get("id", None))
+
+            if raw_id is None:
+                transaction_id = int(_)
+            elif isinstance(raw_id, (int, float)) and not pd.isna(raw_id):
+                transaction_id = int(raw_id)
+            else:
+                transaction_id = int(abs(hash(str(raw_id))) % 10_000_000)
+            database.save_transaction({
+                "transaction_id": transaction_id,
+                "department": row.get("department"),
+                "amount": float(row.get("amount", 0)),
+                "vendor": row.get("vendor"),
+                "purpose": row.get("purpose"),
+                "transaction_date": row.get("date", row.get("transaction_date")),
+                "risk_score": float(row.get("anomaly_score", 0)),
+                "severity": severity,
+                "ai_reason": row.get("ai_reason"),
+                "detection_timestamp": datetime.utcnow().isoformat()
+            })
         
         # Update session state with filtered data
         if selected_department != "All Departments":
