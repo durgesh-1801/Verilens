@@ -794,7 +794,16 @@ with col1:
 
 with col2:
     if 'vendor' in df.columns and len(df) > 0:
-        vendors = ['All'] + sorted(df['vendor'].unique().tolist())
+        vendors = (
+    ['All'] +
+    sorted(
+        df['vendor']
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+)
         selected_vendor = st.selectbox("Vendor", vendors)
     else:
         selected_vendor = 'All'
