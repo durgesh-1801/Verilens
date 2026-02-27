@@ -2,6 +2,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import database  # Database integration
+
+
+# Authentication check
+if not st.session_state.get('authenticated'):
+    st.error("🔒 Access Denied - Please login first")
+    
+    if st.button("🔐 Go to Login"):
+        st.switch_page("pages/_Login.py")
+    
+    st.stop()
+# ========== END AUTHENTICATION CHECK ==========
+
 
 st.set_page_config(page_title="Alerts", page_icon="⚠️", layout="wide")
 
@@ -21,17 +34,15 @@ if 'escalated_alerts' not in st.session_state:
 if 'doc_requested_alerts' not in st.session_state:
     st.session_state.doc_requested_alerts = set()
 
-# ========== ADDITION 1: AUDITOR WORKFLOW SESSION STATE ==========
 # Initialize auditor workflow tracking
 if 'audit_status' not in st.session_state:
-    st.session_state.audit_status = {}  # {transaction_id: "Pending Review" | "Reviewed" | "Escalated"}
+    st.session_state.audit_status = {}
 
 if 'audit_notes' not in st.session_state:
-    st.session_state.audit_notes = {}  # {transaction_id: "notes text"}
+    st.session_state.audit_notes = {}
 
 if 'review_timestamps' not in st.session_state:
-    st.session_state.review_timestamps = {}  # {transaction_id: datetime}
-# ========== END ADDITION 1 ==========
+    st.session_state.review_timestamps = {}
 
 alerts = st.session_state.alerts
 
@@ -170,7 +181,6 @@ else:
                     st.session_state.escalated_alerts.add(alert_id)
                     st.rerun()
 
-# ========== ADDITION 2: HELPER FUNCTION ==========
 def get_ai_confidence(score):
     """Convert anomaly score to AI confidence percentage and level"""
     if score >= 0.8:
@@ -179,7 +189,6 @@ def get_ai_confidence(score):
         return score * 100, "Medium Confidence"
     else:
         return score * 100, "Low Confidence"
-# ========== END ADDITION 2 ==========
 
 # Transaction Details Panel
 if filtered_alerts:
@@ -209,7 +218,6 @@ if filtered_alerts:
             
             st.markdown(f"### {severity_colors.get(severity, '⚪')} Transaction ID: {record_id}")
             
-            # ========== ADDITION 3: AI CONFIDENCE DISPLAY ==========
             # AI Confidence Display
             score = selected_alert.get('score', 0)
             confidence_pct, confidence_level = get_ai_confidence(score)
@@ -219,7 +227,6 @@ if filtered_alerts:
                 st.warning(f"**Risk Score:** {score:.4f} | **Severity:** {severity.upper()}")
             with col_conf2:
                 st.info(f"**AI Confidence:** {confidence_pct:.1f}% ({confidence_level})")
-            # ========== END ADDITION 3 ==========
             
             # Transaction details in columns
             if st.session_state.get('data') is not None and record_id is not None:
@@ -259,7 +266,7 @@ if filtered_alerts:
                     
                     st.markdown("---")
                     
-                    # WHY AI FLAGGED THIS - NEW SECTION
+                    # WHY AI FLAGGED THIS
                     st.markdown("### 🤖 Why AI Flagged This Transaction")
                     
                     with st.container():
@@ -288,10 +295,10 @@ if filtered_alerts:
                         if 'Wire Transfer' in payment_method and amount > 50000:
                             explanations.append("🏦 **Payment Method Alert**: Large wire transfer requires additional scrutiny")
                         
-                        # Time-based check (simplified)
+                        # Time-based check
                         try:
                             trans_date = pd.to_datetime(record.get('date', record.get('transaction_date')))
-                            if trans_date.weekday() >= 5:  # Weekend
+                            if trans_date.weekday() >= 5:
                                 explanations.append("📅 **Time-Based Anomaly**: Transaction occurred on weekend")
                         except:
                             pass
@@ -304,12 +311,11 @@ if filtered_alerts:
                     
                     st.markdown("---")
                     
-                    # TRANSACTION TIMELINE - NEW SECTION
+                    # TRANSACTION TIMELINE
                     st.markdown("### 📅 Transaction Timeline")
                     
                     col1, col2, col3, col4 = st.columns(4)
                     
-                    # Generate timeline dates (mock if not available)
                     try:
                         trans_date = pd.to_datetime(record.get('date', record.get('transaction_date', datetime.now())))
                     except:
@@ -343,13 +349,27 @@ if filtered_alerts:
                     
                     st.markdown("---")
                     
-                    # ========== ADDITION 4: AUDIT CASE WORKFLOW ==========
+                    # ========== AUDIT CASE WORKFLOW WITH DATABASE ==========
                     st.markdown("### 📋 Audit Case Management")
                     
-                    # Initialize defaults for this transaction
-                    current_status = st.session_state.audit_status.get(record_id, "Pending Review")
-                    current_notes = st.session_state.audit_notes.get(record_id, "")
-                    current_timestamp = st.session_state.review_timestamps.get(record_id)
+                    # Load from database if available
+                    db_audit = database.get_audit_status(record_id)
+                    
+                    # Initialize from database or session state
+                    if db_audit:
+                        current_status = db_audit['status']
+                        current_notes = db_audit['auditor_notes'] or ""
+                        if db_audit['review_timestamp']:
+                            try:
+                                current_timestamp = datetime.fromisoformat(db_audit['review_timestamp'])
+                            except:
+                                current_timestamp = st.session_state.review_timestamps.get(record_id)
+                        else:
+                            current_timestamp = st.session_state.review_timestamps.get(record_id)
+                    else:
+                        current_status = st.session_state.audit_status.get(record_id, "Pending Review")
+                        current_notes = st.session_state.audit_notes.get(record_id, "")
+                        current_timestamp = st.session_state.review_timestamps.get(record_id)
                     
                     # Audit Status and Timestamp Display
                     col_audit1, col_audit2 = st.columns([1, 1])
@@ -388,6 +408,7 @@ if filtered_alerts:
                     # Save Audit Info Button
                     if st.button("💾 Save Audit Information", key=f"save_audit_{record_id}", type="primary", use_container_width=True):
                         # Save to session state
+                        old_status = st.session_state.audit_status.get(record_id, "Pending Review")
                         st.session_state.audit_status[record_id] = new_status
                         st.session_state.audit_notes[record_id] = auditor_notes
                         
@@ -395,7 +416,45 @@ if filtered_alerts:
                         if new_status != "Pending Review" and record_id not in st.session_state.review_timestamps:
                             st.session_state.review_timestamps[record_id] = datetime.now()
                         
-                        st.success(f"✓ Audit information saved - Status: {new_status}")
+                        current_timestamp = st.session_state.review_timestamps.get(record_id)
+                        
+                        # ========== SAVE TO DATABASE ==========
+                        try:
+                            # Save transaction to database
+                            transaction_data = {
+                                'transaction_id': record_id,
+                                'department': record.get('department', record.get('dept', 'Unknown')),
+                                'amount': float(record.get('amount', record.get('transaction_amount', 0))),
+                                'vendor': record.get('vendor', record.get('vendor_name', 'Unknown')),
+                                'purpose': record.get('purpose', record.get('description', 'N/A')),
+                                'transaction_date': str(record.get('date', record.get('transaction_date', ''))),
+                                'risk_score': float(selected_alert.get('score', 0)),
+                                'severity': selected_alert.get('severity', 'medium'),
+                                'ai_reason': selected_alert.get('reason', 'Anomaly detected'),
+                                'detection_timestamp': selected_alert.get('timestamp', datetime.now().isoformat())
+                            }
+                            database.save_transaction(transaction_data)
+                            
+                            # Save audit action
+                            database.save_audit_action(
+                                transaction_id=record_id,
+                                status=new_status,
+                                auditor_notes=auditor_notes,
+                                review_timestamp=current_timestamp.isoformat() if current_timestamp else None,
+                                action_type="status_update" if old_status != new_status else "notes_update"
+                            )
+                            
+                            # Log history if status changed
+                            if old_status != new_status:
+                                database.log_audit_history(record_id, "status", old_status, new_status)
+                            
+                            st.success(f"✓ Audit information saved to database - Status: {new_status}")
+                            
+                        except Exception as e:
+                            st.error(f"Database save error: {e}")
+                            st.warning("Data saved to session only (not persisted)")
+                        # ========== END DATABASE SAVE ==========
+                        
                         st.rerun()
                     
                     # Display current audit summary
@@ -415,9 +474,9 @@ if filtered_alerts:
                                 st.text(current_notes)
                     
                     st.markdown("---")
-                    # ========== END ADDITION 4 ==========
+                    # ========== END AUDIT CASE WORKFLOW ==========
                     
-                    # AUDITOR ACTIONS - UPDATED
+                    # AUDITOR ACTIONS
                     st.markdown("### 👨‍💼 Auditor Actions")
                     
                     alert_id = selected_alert.get('id')
