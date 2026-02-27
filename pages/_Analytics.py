@@ -5,6 +5,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+
+# Authentication check
+if not st.session_state.get('authenticated'):
+    st.error("🔒 Access Denied - Please login first")
+    
+    if st.button("🔐 Go to Login"):
+        st.switch_page("pages/_Login.py")
+    
+    st.stop()
+# ========== END AUTHENTICATION CHECK ==========
+
+
 st.set_page_config(page_title="Analytics", page_icon="📈", layout="wide")
 
 st.title("📈 Advanced Analytics & Insights")
