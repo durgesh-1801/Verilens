@@ -10,6 +10,8 @@ Day 7 Updates: stabilized it like a real product
 Day 8 Updates: Secure Authentication System
 Day 9 Updates: Role-Based Access Control (RBAC)
 Day 10 Updates: Multi-Tenant Organization System
+Day 11 Updates: Audit Rule Engine Integration
+Day 12 Updates: Audit Case Management System
 """
 
 import streamlit as st
@@ -123,6 +125,34 @@ except ImportError:
     DATA_PIPELINE_AVAILABLE = False
     print("Warning: utils/data_pipeline.py not found - advanced pipeline disabled")
 # ========== END DATA PIPELINE IMPORT ==========
+
+# ========== AUDIT ENGINE IMPORT ==========
+try:
+    from utils.audit_engine import (
+        generate_audit_flags,
+        summarize_audit_findings,
+        get_audit_rules_documentation
+    )
+    AUDIT_ENGINE_AVAILABLE = True
+except ImportError:
+    AUDIT_ENGINE_AVAILABLE = False
+    print("Warning: utils/audit_engine.py not found - audit rules disabled")
+# ========== END AUDIT ENGINE IMPORT ==========
+
+# ========== AUDIT CASE MANAGER IMPORT ==========
+try:
+    from utils.AuditCaseManager import (
+        create_audit_cases,
+        update_case_status,
+        assign_case,
+        add_case_comment,
+        get_case_summary
+    )
+    AUDIT_CASE_MANAGER_AVAILABLE = True
+except ImportError:
+    AUDIT_CASE_MANAGER_AVAILABLE = False
+    print("Warning: Audit Case Manager not available")
+# ========== END AUDIT CASE MANAGER IMPORT ==========
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -272,7 +302,7 @@ with st.sidebar:
     role_badge = role_colors.get(role, '⚪')
     st.info(f"{role_badge} **Role:** {role.upper()}")
     
-    # ========== NEW: DISPLAY ORGANIZATION ==========
+    # Display organization
     org_id = st.session_state['user'].get('organization_id')
     if org_id:
         try:
@@ -281,7 +311,6 @@ with st.sidebar:
                 st.info(f"🏢 **Organization:** {org['name']}")
         except:
             pass
-    # ========== END ORGANIZATION DISPLAY ==========
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -326,7 +355,11 @@ if 'data_health' not in st.session_state:
 
 if 'pipeline_mode' not in st.session_state:
     st.session_state.pipeline_mode = 'auto'  # 'auto' or 'manual'
-# ========== END NEW SESSION STATE ==========
+
+# ========== NEW: AUDIT ENGINE SESSION STATE ==========
+if 'audit_processed' not in st.session_state:
+    st.session_state.audit_processed = False
+# ========== END AUDIT SESSION STATE ==========
 
 # ==========================================
 # SAMPLE DATA GENERATOR (UNCHANGED)
@@ -362,12 +395,12 @@ Designed for auditors to identify high-risk public transactions using explainabl
 try:
     user_id = st.session_state['user']['id']
     user_role = st.session_state['user'].get('role', 'viewer')
-    organization_id = st.session_state['user'].get('organization_id')  # NEW
+    organization_id = st.session_state['user'].get('organization_id')
     
     db_summary = database.get_audit_summary(
         user_id=user_id, 
         user_role=user_role, 
-        organization_id=organization_id  # NEW
+        organization_id=organization_id
     )
     
     if db_summary['total_transactions'] > 0:
@@ -451,10 +484,11 @@ if option == "Upload CSV/Excel File":
             
             st.session_state.raw_uploaded_data = raw_df
             st.session_state.schema_validated = False  # Reset validation
+            st.session_state.audit_processed = False  # Reset audit
             
             st.success(f"✓ File uploaded: {len(raw_df)} rows, {len(raw_df.columns)} columns")
             
-            # ========== NEW: PIPELINE MODE SELECTOR ==========
+            # Pipeline mode selector
             st.markdown("---")
             pipeline_mode = st.radio(
                 "Processing Mode:",
@@ -464,9 +498,8 @@ if option == "Upload CSV/Excel File":
             )
             
             st.session_state.pipeline_mode = 'auto' if 'Auto' in pipeline_mode else 'manual'
-            # ========== END PIPELINE MODE SELECTOR ==========
             
-            # ========== NEW: AUTO PIPELINE ==========
+            # Auto Pipeline
             if st.session_state.pipeline_mode == 'auto' and DATA_PIPELINE_AVAILABLE:
                 st.markdown("#### 🚀 Automatic Data Pipeline")
                 
@@ -482,6 +515,32 @@ if option == "Upload CSV/Excel File":
                             is_valid, issues = validate_pipeline_output(df_processed)
                             
                             if is_valid:
+                                # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES ==========
+                                if AUDIT_ENGINE_AVAILABLE:
+                                    with st.spinner("🔍 Running audit rule engine..."):
+                                        df_processed = generate_audit_flags(df_processed)
+                                        st.session_state.audit_processed = True
+                                        
+                                        audit_summary = summarize_audit_findings(df_processed)
+                                        st.success(f"✓ Audit engine processed: {audit_summary['total_flagged']} transactions flagged")
+                                        
+                                        # ========== NEW: CREATE AUDIT CASES ==========
+                                        if AUDIT_CASE_MANAGER_AVAILABLE:
+                                            df_processed = create_audit_cases(df_processed)
+                                            
+                                            # Count created cases
+                                            cases_created = df_processed['audit_case_id'].notna().sum()
+                                            if cases_created > 0:
+                                                st.success(f"✓ Created {cases_created} audit cases for high/medium severity transactions")
+                                                
+                                                # Save cases to database
+                                                try:
+                                                    database.insert_audit_cases(df_processed)
+                                                except Exception as e:
+                                                    st.warning(f"Cases created but not saved to database: {e}")
+                                        # ========== END CREATE AUDIT CASES ==========
+                                # ========== END MODIFIED AUDIT ENGINE ==========
+                                
                                 normalized_health = normalize_health_output(df_processed, health)
 
                                 st.session_state.update({
@@ -490,12 +549,11 @@ if option == "Upload CSV/Excel File":
                                     "data_health": normalized_health
                                 })
 
-                                # ========== MODIFIED: SAVE WITH ORGANIZATION_ID ==========
+                                # Save to database
                                 try:
                                     user_id = st.session_state['user']['id']
                                     organization_id = st.session_state['user'].get('organization_id')
 
-                                    # Bridge pipeline date to DB schema
                                     if "date" in df_processed.columns and "transaction_date" not in df_processed.columns:
                                         df_processed["transaction_date"] = df_processed["date"]
 
@@ -505,7 +563,6 @@ if option == "Upload CSV/Excel File":
 
                                 except Exception as e:
                                     st.warning(f"Dataset processed but not saved to database: {e}")
-                                # ========== END DATABASE SAVE ==========
                                 
                                 # Show health metrics
                                 col1, col2, col3, col4 = st.columns(4)
@@ -523,7 +580,6 @@ if option == "Upload CSV/Excel File":
                                     score_color = "🟢" if health['overall_score'] >= 80 else "🟡" if health['overall_score'] >= 60 else "🔴"
                                     st.metric("Overall Health", f"{score_color} {health['overall_score']}")
                                 
-                                # Show enriched features
                                 st.info("✨ **Enriched Features Added:** monthly_spend_per_department, vendor_transaction_count, zscore_amount, amount_percentile, day_of_week, is_weekend")
                             
                             else:
@@ -532,7 +588,6 @@ if option == "Upload CSV/Excel File":
                                     st.warning(f"  • {issue}")
                                 st.info("Data processed but may have quality issues. Review and proceed with caution.")
                                 
-                                # Still save the data
                                 normalized_health = normalize_health_output(df_processed, health)
 
                                 st.session_state.update({
@@ -551,7 +606,6 @@ if option == "Upload CSV/Excel File":
             elif st.session_state.pipeline_mode == 'auto' and not DATA_PIPELINE_AVAILABLE:
                 st.warning("⚠️ Auto pipeline not available. Install data_pipeline.py or use manual mapping.")
                 st.session_state.pipeline_mode = 'manual'
-            # ========== END AUTO PIPELINE ==========
             
             # Show raw preview
             with st.expander("🔍 View Raw Data"):
@@ -567,6 +621,7 @@ else:
         raw_df = generate_sample_data(rows)
         st.session_state.raw_uploaded_data = raw_df
         st.session_state.schema_validated = False
+        st.session_state.audit_processed = False
         
         # For test data, auto-validate since it's already in standard format
         if DATA_PIPELINE_AVAILABLE:
@@ -574,11 +629,32 @@ else:
             df_enriched = enrich_features(raw_df)
             health = compute_health_score(df_enriched)
             
+            # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES TO TEST DATA ==========
+            if AUDIT_ENGINE_AVAILABLE:
+                df_enriched = generate_audit_flags(df_enriched)
+                st.session_state.audit_processed = True
+                audit_summary = summarize_audit_findings(df_enriched)
+                st.info(f"🔍 Audit: {audit_summary['total_flagged']} transactions flagged")
+                
+                # Create audit cases
+                if AUDIT_CASE_MANAGER_AVAILABLE:
+                    df_enriched = create_audit_cases(df_enriched)
+                    cases_created = df_enriched['audit_case_id'].notna().sum()
+                    if cases_created > 0:
+                        st.info(f"📋 Created {cases_created} audit cases")
+                        
+                        # Save cases to database
+                        try:
+                            database.insert_audit_cases(df_enriched)
+                        except:
+                            pass
+            # ========== END MODIFIED AUDIT ENGINE ==========
+            
             st.session_state.data = df_enriched
             normalized_health = normalize_health_output(df_enriched, health)
             st.session_state.data_health = normalized_health
             
-            # ========== MODIFIED: SAVE WITH ORGANIZATION_ID ==========
+            # Save to database
             try:
                 user_id = st.session_state['user']['id']
                 organization_id = st.session_state['user'].get('organization_id')
@@ -586,7 +662,6 @@ else:
                 st.success("✓ Test dataset loaded and saved to your organization")
             except Exception as e:
                 st.warning(f"Dataset loaded but not saved to database: {e}")
-            # ========== END DATABASE SAVE ==========
 
         else:
             st.session_state.data = raw_df
@@ -692,11 +767,26 @@ if (st.session_state.raw_uploaded_data is not None and
                             df_enriched = enrich_features(df_clean)
                             health = compute_health_score(df_enriched)
                             
+                            # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES ==========
+                            if AUDIT_ENGINE_AVAILABLE:
+                                df_enriched = generate_audit_flags(df_enriched)
+                                st.session_state.audit_processed = True
+                                
+                                if AUDIT_CASE_MANAGER_AVAILABLE:
+                                    df_enriched = create_audit_cases(df_enriched)
+                                    
+                                    # Save cases to database
+                                    try:
+                                        database.insert_audit_cases(df_enriched)
+                                    except:
+                                        pass
+                            # ========== END MODIFIED AUDIT ENGINE ==========
+                            
                             st.session_state.data = df_enriched
                             normalized_health = normalize_health_output(df_enriched, health)
                             st.session_state.data_health = normalized_health
                             
-                            # ========== MODIFIED: SAVE WITH ORGANIZATION_ID ==========
+                            # Save to database
                             try:
                                 user_id = st.session_state['user']['id']
                                 organization_id = st.session_state['user'].get('organization_id')
@@ -705,7 +795,6 @@ if (st.session_state.raw_uploaded_data is not None and
                             except Exception as e:
                                 st.success("✓ Schema validated, cleaned, and enriched successfully!")
                                 st.warning(f"Not saved to database: {e}")
-                            # ========== END DATABASE SAVE ==========
                         except:
                             st.session_state.data = standardized_df
                             st.session_state.data_health = get_data_health_summary(standardized_df)
@@ -784,6 +873,44 @@ if st.session_state.schema_validated and st.session_state.data_health is not Non
         with metric_col4:
             score_color = "🟢" if health['overall_score'] >= 80 else "🟡" if health['overall_score'] >= 60 else "🔴"
             st.metric("Overall Score", f"{score_color} {health['overall_score']}")
+    
+    # Audit Engine Summary
+    if st.session_state.audit_processed and AUDIT_ENGINE_AVAILABLE and st.session_state.data is not None:
+        st.markdown("#### 🔍 Audit Rule Engine Summary")
+        
+        audit_summary = summarize_audit_findings(st.session_state.data)
+        
+        audit_col1, audit_col2, audit_col3, audit_col4 = st.columns(4)
+        
+        with audit_col1:
+            st.metric("Total Flagged", audit_summary['total_flagged'])
+        with audit_col2:
+            st.metric("🔴 High Risk", audit_summary['high_risk_count'])
+        with audit_col3:
+            st.metric("🟡 Medium Risk", audit_summary['medium_risk_count'])
+        with audit_col4:
+            st.metric("🟢 Low Risk", audit_summary['low_risk_count'])
+    
+    # ========== NEW: AUDIT CASE SUMMARY ==========
+    if AUDIT_CASE_MANAGER_AVAILABLE and st.session_state.data is not None:
+        if 'audit_case_id' in st.session_state.data.columns:
+            st.markdown("#### 📋 Audit Case Summary")
+            
+            case_summary = get_case_summary(st.session_state.data)
+            
+            case_col1, case_col2, case_col3, case_col4, case_col5 = st.columns(5)
+            
+            with case_col1:
+                st.metric("Total Cases", f"{case_summary['total_cases']:,}")
+            with case_col2:
+                st.metric("🟡 Open", f"{case_summary['open_cases']:,}")
+            with case_col3:
+                st.metric("🔵 Under Review", f"{case_summary['under_review']:,}")
+            with case_col4:
+                st.metric("🔴 Escalated", f"{case_summary['escalated']:,}")
+            with case_col5:
+                st.metric("🟢 Closed", f"{case_summary['closed_cases']:,}")
+    # ========== END AUDIT CASE SUMMARY ==========
     
     # Missing Values Breakdown
     st.markdown("#### Missing Values by Column")
@@ -876,6 +1003,35 @@ if st.session_state.data is not None and st.session_state.schema_validated:
             st.info(f"**Available Features:** {', '.join(available_enriched)}")
             st.dataframe(preview_data[available_enriched].head(10), use_container_width=True)
     
+    # Show audit flags if available
+    if st.session_state.audit_processed and 'audit_flags' in preview_data.columns:
+        with st.expander("🔍 View Audit Flags"):
+            audit_cols = ['transaction_id', 'audit_risk_score', 'audit_severity', 'audit_flags']
+            available_audit_cols = [col for col in audit_cols if col in preview_data.columns]
+            
+            flagged_data = preview_data[preview_data['audit_flags'].apply(lambda x: len(x) > 0)]
+            
+            if len(flagged_data) > 0:
+                st.info(f"**{len(flagged_data)} transactions flagged by audit rules**")
+                st.dataframe(flagged_data[available_audit_cols].head(10), use_container_width=True)
+            else:
+                st.success("✓ No audit flags detected")
+    
+    # ========== NEW: SHOW AUDIT CASES IF AVAILABLE ==========
+    if 'audit_case_id' in preview_data.columns:
+        with st.expander("📋 View Audit Cases"):
+            case_cols = ['transaction_id', 'audit_case_id', 'audit_status', 'audit_severity', 'audit_risk_score']
+            available_case_cols = [col for col in case_cols if col in preview_data.columns]
+            
+            cases_data = preview_data[preview_data['audit_case_id'].notna()]
+            
+            if len(cases_data) > 0:
+                st.info(f"**{len(cases_data)} audit cases created**")
+                st.dataframe(cases_data[available_case_cols].head(10), use_container_width=True)
+            else:
+                st.info("No audit cases created (only High/Medium severity transactions become cases)")
+    # ========== END AUDIT CASES DISPLAY ==========
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.raw_uploaded_data is not None and not st.session_state.schema_validated:
@@ -914,6 +1070,6 @@ if st.session_state.data is not None and st.session_state.schema_validated:
 st.markdown("""
 <div class="footer">
 🛡️ AI Fraud Detection System · Hack4Delhi · Verilens Team<br>
-Built with Streamlit · Explainable AI · Department-Based Risk Analysis · Persistent Audit Trail · Smart Data Validation · Automated Pipeline · Secure Authentication · Role-Based Access Control · Multi-Tenant Organizations
+Built with Streamlit · Explainable AI · Department-Based Risk Analysis · Persistent Audit Trail · Smart Data Validation · Automated Pipeline · Secure Authentication · Role-Based Access Control · Multi-Tenant Organizations · Intelligent Audit Rules · Audit Case Management
 </div>
 """, unsafe_allow_html=True)
