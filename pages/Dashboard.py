@@ -1,3 +1,8 @@
+"""
+Dashboard Page
+Real-time analytics and visualizations with Audit Intelligence
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,6 +11,48 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from scipy import stats
+import sys
+from pathlib import Path
+
+# ========== AUDIT ENGINE IMPORT ==========
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    from utils.audit_engine import (
+        generate_audit_flags,
+        summarize_audit_findings,
+        filter_by_audit_severity,
+        get_flagged_transactions
+    )
+    AUDIT_ENGINE_AVAILABLE = True
+except ImportError:
+    AUDIT_ENGINE_AVAILABLE = False
+    print("Warning: Audit engine not available")
+# ========== END AUDIT ENGINE IMPORT ==========
+
+def normalize_flags(flags):
+    if isinstance(flags, list):
+        return flags
+    elif isinstance(flags, str):
+        return [f.strip() for f in flags.split(";") if f.strip()]
+    else:
+        return []
+
+# Authentication check
+if not st.session_state.get('authenticated'):
+    st.error("🔒 Access Denied - Please login first")
+    
+    if st.button("🔐 Go to Login"):
+        st.switch_page("pages/_Login.py")
+    
+    st.stop()
+# ========== END AUTHENTICATION CHECK ==========
+
+# ========== RBAC CHECK ==========
+user_id = st.session_state['user']['id']
+user_role = st.session_state['user'].get('role', 'viewer')
+
+# All roles can view dashboard (data is already filtered by RBAC in database)
+# ========== END RBAC CHECK ==========
 
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 
@@ -23,6 +70,19 @@ if st.session_state.get('data') is None:
 
 df = st.session_state.data.copy()
 
+# ========== NEW: APPLY AUDIT ENGINE IF NOT ALREADY APPLIED ==========
+if AUDIT_ENGINE_AVAILABLE and 'audit_flags' not in df.columns:
+    with st.spinner("🔍 Applying audit intelligence..."):
+        try:
+            df = generate_audit_flags(df)
+            st.session_state.data = df  # Update session state
+            st.session_state.audit_processed = True
+            st.success("✓ Audit rules applied to data")
+        except Exception as e:
+            st.warning(f"Audit engine could not be applied: {e}")
+            AUDIT_ENGINE_AVAILABLE = False
+# ========== END AUDIT ENGINE APPLICATION ==========
+
 # ==========================================
 # APPLY DEPARTMENT FILTER
 # ==========================================
@@ -36,15 +96,19 @@ if selected_department != "All Departments":
 else:
     st.info(f"🏛️ Dashboard: **All Departments** - Global Overview")
 
-# ========== ADDITION 1: QUICK FILTERS ==========
+# ========== ADDITION 1: QUICK FILTERS (ENHANCED WITH AUDIT SEVERITY) ==========
 st.markdown("---")
 st.subheader("🔍 Analytics Filters")
 
 filter_col1, filter_col2, filter_col3 = st.columns(3)
 
 with filter_col1:
-    # Risk level filter
-    risk_filter_options = ["All", "High-Risk", "Medium-Risk", "Normal"]
+    # Risk level filter - now includes audit severity if available
+    if AUDIT_ENGINE_AVAILABLE and 'audit_severity' in df.columns:
+        risk_filter_options = ["All", "Audit: High Risk", "Audit: Medium Risk", "Audit: Low Risk", "ML: High-Risk", "ML: Medium-Risk", "ML: Normal"]
+    else:
+        risk_filter_options = ["All", "High-Risk", "Medium-Risk", "Normal"]
+    
     selected_risk_filter = st.selectbox(
         "Filter by Risk Level",
         risk_filter_options,
@@ -97,28 +161,36 @@ with filter_col3:
 filtered_analytics_df = df.copy()
 
 # Apply risk filter
-if selected_risk_filter != "All" and 'is_anomaly' in filtered_analytics_df.columns:
-    if selected_risk_filter == "High-Risk":
-        # High risk: anomaly score > 0.8
-        if 'anomaly_score' in filtered_analytics_df.columns:
-            filtered_analytics_df = filtered_analytics_df[
-                (filtered_analytics_df['is_anomaly'] == -1) & 
-                (filtered_analytics_df['anomaly_score'] > 0.8)
-            ]
-        else:
-            filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == -1]
-    elif selected_risk_filter == "Medium-Risk":
-        # Medium risk: 0.5 < anomaly score <= 0.8
-        if 'anomaly_score' in filtered_analytics_df.columns:
-            filtered_analytics_df = filtered_analytics_df[
-                (filtered_analytics_df['is_anomaly'] == -1) & 
-                (filtered_analytics_df['anomaly_score'] > 0.5) & 
-                (filtered_analytics_df['anomaly_score'] <= 0.8)
-            ]
-        else:
-            filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == -1]
-    elif selected_risk_filter == "Normal":
-        filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == 1]
+if selected_risk_filter != "All":
+    if selected_risk_filter.startswith("Audit:") and AUDIT_ENGINE_AVAILABLE and 'audit_severity' in filtered_analytics_df.columns:
+        # Audit engine filter
+        if "High Risk" in selected_risk_filter:
+            filtered_analytics_df = filter_by_audit_severity(filtered_analytics_df, "High")
+        elif "Medium Risk" in selected_risk_filter:
+            filtered_analytics_df = filter_by_audit_severity(filtered_analytics_df, "Medium")
+        elif "Low Risk" in selected_risk_filter:
+            filtered_analytics_df = filter_by_audit_severity(filtered_analytics_df, "Low")
+    elif 'is_anomaly' in filtered_analytics_df.columns:
+        # ML-based filter
+        if selected_risk_filter == "High-Risk" or selected_risk_filter == "ML: High-Risk":
+            if 'anomaly_score' in filtered_analytics_df.columns:
+                filtered_analytics_df = filtered_analytics_df[
+                    (filtered_analytics_df['is_anomaly'] == -1) & 
+                    (filtered_analytics_df['anomaly_score'] > 0.8)
+                ]
+            else:
+                filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == -1]
+        elif selected_risk_filter == "Medium-Risk" or selected_risk_filter == "ML: Medium-Risk":
+            if 'anomaly_score' in filtered_analytics_df.columns:
+                filtered_analytics_df = filtered_analytics_df[
+                    (filtered_analytics_df['is_anomaly'] == -1) & 
+                    (filtered_analytics_df['anomaly_score'] > 0.5) & 
+                    (filtered_analytics_df['anomaly_score'] <= 0.8)
+                ]
+            else:
+                filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == -1]
+        elif selected_risk_filter == "Normal" or selected_risk_filter == "ML: Normal":
+            filtered_analytics_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == 1]
 
 # Apply date filter
 if date_range and len(date_range) == 2 and date_col:
@@ -133,7 +205,127 @@ st.info(f"📊 Analytics showing {len(filtered_analytics_df)} transactions after
 
 st.markdown("---")
 
-# ========== ADDITION 2: DEPARTMENT RISK SUMMARY PANEL ==========
+# ========== ADDITION 2: AUDIT INTELLIGENCE SUMMARY (NEW) ==========
+if AUDIT_ENGINE_AVAILABLE and 'audit_severity' in filtered_analytics_df.columns:
+    st.subheader("🔍 Audit Intelligence Summary")
+    
+    audit_summary = summarize_audit_findings(filtered_analytics_df)
+    
+    audit_col1, audit_col2, audit_col3, audit_col4 = st.columns(4)
+    
+    with audit_col1:
+        st.metric(
+            "Total Flagged",
+            f"{audit_summary['total_flagged']:,}",
+            delta=f"{audit_summary['total_flagged']/len(filtered_analytics_df)*100:.1f}%" if len(filtered_analytics_df) > 0 else "0%"
+        )
+    
+    with audit_col2:
+        st.metric(
+            "🔴 High Risk (Audit)",
+            f"{audit_summary['high_risk_count']:,}",
+            delta="Requires immediate review",
+            delta_color="inverse"
+        )
+    
+    with audit_col3:
+        st.metric(
+            "🟡 Medium Risk (Audit)",
+            f"{audit_summary['medium_risk_count']:,}",
+            delta="Further investigation"
+        )
+    
+    with audit_col4:
+        st.metric(
+            "🟢 Low Risk (Audit)",
+            f"{audit_summary['low_risk_count']:,}",
+            delta="Monitor"
+        )
+    
+    # Show audit rules breakdown
+    if audit_summary['total_flagged'] > 0:
+        with st.expander("📋 View Audit Flags Breakdown"):
+            flagged_df = get_flagged_transactions(filtered_analytics_df, min_flags=1)
+            
+            if len(flagged_df) > 0:
+                # Count each flag type
+                all_flags = []
+
+                for flags_list in flagged_df['audit_flags']:
+                    normalized = normalize_flags(flags_list)
+                    all_flags.extend(normalized)
+                flag_counts = pd.Series(all_flags).value_counts()
+                
+                # Display flag counts
+                st.markdown("**Most Common Audit Flags:**")
+                for flag, count in flag_counts.items():
+                    st.markdown(f"- **{flag}**: {count} occurrences")
+                
+                # Show sample flagged transactions
+                st.markdown("**Sample Flagged Transactions:**")
+                display_cols = ['transaction_id', 'amount', 'vendor', 'audit_risk_score', 'audit_severity', 'audit_flags']
+                available_display_cols = [col for col in display_cols if col in flagged_df.columns]
+                st.dataframe(flagged_df[available_display_cols].head(10), use_container_width=True)
+    
+    st.markdown("---")
+# ========== END AUDIT INTELLIGENCE SUMMARY ==========
+
+# ========== NEW: AUDIT CASE METRICS ==========
+if AUDIT_ENGINE_AVAILABLE and st.session_state.get('data') is not None:
+    df = st.session_state.data
+    
+    if 'audit_case_id' in df.columns:
+        from utils.AuditCaseManager import get_case_summary
+        
+        st.markdown("---")
+        st.subheader("📋 Audit Case Management")
+        
+        case_summary = get_case_summary(df)
+        
+        case_col1, case_col2, case_col3, case_col4, case_col5 = st.columns(5)
+        
+        with case_col1:
+            st.metric("Total Cases", f"{case_summary['total_cases']:,}")
+        
+        with case_col2:
+            st.metric(
+                "🟡 Open Cases",
+                f"{case_summary['open_cases']:,}",
+                delta="Needs Assignment"
+            )
+        
+        with case_col3:
+            st.metric(
+                "🔵 Under Review",
+                f"{case_summary['under_review']:,}",
+                delta="In Progress"
+            )
+        
+        with case_col4:
+            st.metric(
+                "🔴 Escalated",
+                f"{case_summary['escalated']:,}",
+                delta="High Priority",
+                delta_color="inverse"
+            )
+        
+        with case_col5:
+            st.metric(
+                "🟢 Closed Cases",
+                f"{case_summary['closed_cases']:,}",
+                delta="Resolved"
+            )
+        
+        # Case completion rate
+        if case_summary['total_cases'] > 0:
+            completion_rate = (case_summary['closed_cases'] / case_summary['total_cases']) * 100
+            st.progress(completion_rate / 100)
+            st.caption(f"**Case Completion Rate:** {completion_rate:.1f}% ({case_summary['closed_cases']} / {case_summary['total_cases']} cases resolved)")
+        
+        st.markdown("---")
+# ========== END AUDIT CASE METRICS ==========
+
+# ========== ADDITION 2 (ORIGINAL): DEPARTMENT RISK SUMMARY PANEL ==========
 st.subheader("🎯 Department Risk Summary")
 
 risk_summary_col1, risk_summary_col2, risk_summary_col3, risk_summary_col4 = st.columns(4)
@@ -173,7 +365,7 @@ with risk_summary_col1:
 with risk_summary_col2:
     high_pct = (high_risk / total_txns * 100) if total_txns > 0 else 0
     st.metric(
-        "🔴 High Risk",
+        "🔴 High Risk (ML)",
         f"{high_risk:,}",
         delta=f"{high_pct:.1f}% flagged",
         delta_color="inverse"
@@ -182,7 +374,7 @@ with risk_summary_col2:
 with risk_summary_col3:
     medium_pct = (medium_risk / total_txns * 100) if total_txns > 0 else 0
     st.metric(
-        "🟠 Medium Risk",
+        "🟠 Medium Risk (ML)",
         f"{medium_risk:,}",
         delta=f"{medium_pct:.1f}% flagged",
         delta_color="inverse"
@@ -191,7 +383,7 @@ with risk_summary_col3:
 with risk_summary_col4:
     normal_pct = (normal / total_txns * 100) if total_txns > 0 else 0
     st.metric(
-        "🟢 Normal",
+        "🟢 Normal (ML)",
         f"{normal:,}",
         delta=f"{normal_pct:.1f}% clean"
     )
@@ -201,7 +393,7 @@ total_flagged = high_risk + medium_risk
 total_flagged_pct = (total_flagged / total_txns * 100) if total_txns > 0 else 0
 
 st.progress(total_flagged_pct / 100)
-st.caption(f"**Overall Risk Rate:** {total_flagged_pct:.2f}% of transactions flagged ({total_flagged:,} / {total_txns:,})")
+st.caption(f"**Overall ML Risk Rate:** {total_flagged_pct:.2f}% of transactions flagged ({total_flagged:,} / {total_txns:,})")
 # ========== END ADDITION 2 ==========
 
 st.markdown("---")
@@ -241,7 +433,6 @@ if date_col and 'is_anomaly' in filtered_analytics_df.columns and len(filtered_a
                 .reset_index()
             )
 
-            # Rename to keep your existing chart logic unchanged
             risk_trend = risk_trend.rename(columns={
                 'High_Risk': 'High Risk',
                 'Medium_Risk': 'Medium Risk',
@@ -305,17 +496,38 @@ else:
 
 st.markdown("---")
 
-# ========== ADDITION 4: TOP RISK VENDORS TABLE ==========
+# ========== ADDITION 4: TOP RISK VENDORS TABLE (ENHANCED WITH AUDIT) ==========
 st.subheader("🏢 Top Risk Vendors")
 
-if 'vendor' in filtered_analytics_df.columns and 'is_anomaly' in filtered_analytics_df.columns and len(filtered_analytics_df) > 0:
-    # Get risky transactions
-    risky_df = filtered_analytics_df[filtered_analytics_df['is_anomaly'] == -1].copy()
+if 'vendor' in filtered_analytics_df.columns and len(filtered_analytics_df) > 0:
+    # Get risky transactions from both ML and Audit
+    risky_df = filtered_analytics_df.copy()
+    
+    # Filter for risky transactions
+    if 'is_anomaly' in risky_df.columns:
+        ml_risky = risky_df[risky_df['is_anomaly'] == -1]
+    else:
+        ml_risky = pd.DataFrame()
+    
+    if AUDIT_ENGINE_AVAILABLE and 'audit_severity' in risky_df.columns:
+        audit_risky = risky_df[risky_df['audit_severity'].isin(['High', 'Medium'])]
+    else:
+        audit_risky = pd.DataFrame()
+    
+    # Combine ML and Audit risk (union)
+    if len(ml_risky) > 0 and len(audit_risky) > 0:
+        risky_df = pd.concat([ml_risky, audit_risky]).drop_duplicates(subset=['transaction_id'] if 'transaction_id' in risky_df.columns else None)
+    elif len(ml_risky) > 0:
+        risky_df = ml_risky
+    elif len(audit_risky) > 0:
+        risky_df = audit_risky
+    else:
+        risky_df = pd.DataFrame()
     
     if len(risky_df) > 0 and 'amount' in risky_df.columns:
         # Group by vendor
         vendor_risk = risky_df.groupby('vendor').agg({
-            'vendor': 'count',  # Will rename to risk_count
+            'vendor': 'count',
             'amount': 'sum'
         }).rename(columns={'vendor': 'risk_count', 'amount': 'total_risky_amount'})
         
@@ -324,6 +536,12 @@ if 'vendor' in filtered_analytics_df.columns and 'is_anomaly' in filtered_analyt
             high_risk_counts = risky_df[risky_df['anomaly_score'] > 0.8].groupby('vendor').size()
             vendor_risk['high_risk_count'] = high_risk_counts
             vendor_risk['high_risk_count'] = vendor_risk['high_risk_count'].fillna(0).astype(int)
+        
+        # Add audit high risk count
+        if AUDIT_ENGINE_AVAILABLE and 'audit_severity' in risky_df.columns:
+            audit_high_counts = risky_df[risky_df['audit_severity'] == 'High'].groupby('vendor').size()
+            vendor_risk['audit_high_count'] = audit_high_counts
+            vendor_risk['audit_high_count'] = vendor_risk['audit_high_count'].fillna(0).astype(int)
         
         # Sort by risk count
         vendor_risk = vendor_risk.sort_values('risk_count', ascending=False).head(10)
@@ -334,11 +552,15 @@ if 'vendor' in filtered_analytics_df.columns and 'is_anomaly' in filtered_analyt
         
         # Display columns
         display_cols = ['vendor', 'risk_count', 'total_risky_amount']
-        col_names = ['Vendor Name', 'High-Risk Transaction Count', 'Total Risky Amount']
+        col_names = ['Vendor Name', 'Risk Transaction Count', 'Total Risky Amount']
         
         if 'high_risk_count' in vendor_risk.columns:
             display_cols.insert(2, 'high_risk_count')
-            col_names.insert(2, 'High Severity Count')
+            col_names.insert(2, 'ML High Severity')
+        
+        if 'audit_high_count' in vendor_risk.columns:
+            display_cols.insert(3, 'audit_high_count')
+            col_names.insert(3, 'Audit High Severity')
         
         vendor_risk_display = vendor_risk[display_cols].copy()
         vendor_risk_display.columns = col_names
@@ -386,13 +608,13 @@ if 'vendor' in filtered_analytics_df.columns and 'is_anomaly' in filtered_analyt
     elif len(risky_df) > 0:
         # No amount column, just show count
         vendor_risk = risky_df['vendor'].value_counts().head(10).reset_index()
-        vendor_risk.columns = ['Vendor Name', 'High-Risk Transaction Count']
+        vendor_risk.columns = ['Vendor Name', 'Risk Transaction Count']
         
         st.dataframe(vendor_risk, use_container_width=True, hide_index=True)
     else:
         st.info("No risky transactions found for vendor analysis")
 else:
-    st.info("Vendor risk analysis requires vendor column and anomaly detection")
+    st.info("Vendor risk analysis requires vendor column")
 # ========== END ADDITION 4 ==========
 
 st.markdown("---")
@@ -795,15 +1017,13 @@ with col1:
 with col2:
     if 'vendor' in df.columns and len(df) > 0:
         vendors = (
-    ['All'] +
-    sorted(
-        df['vendor']
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+    df['vendor']
+    .dropna()
+    .astype(str)
+    .str.strip()
     )
-)
+
+        vendors = ['All'] + sorted(vendors[vendors != ""].unique())
         selected_vendor = st.selectbox("Vendor", vendors)
     else:
         selected_vendor = 'All'
