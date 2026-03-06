@@ -1,559 +1,548 @@
 """
-Data Pipeline Module for AI Fraud Detection System
-Handles auto-detection, cleaning, validation, and feature enrichment
+Data Pipeline - Real Production-Grade Implementation
+Automated column detection, cleaning, enrichment, and validation
+Enhanced with Data Quality & Validation Layer
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, Optional
-import re
 from datetime import datetime
-from scipy import stats
+from typing import Dict, Tuple, List
 
 
-# ==========================================
-# AUTO-DETECT COLUMNS
-# ==========================================
-def auto_detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+# =====================================================
+# STANDARD SCHEMA DEFINITION
+# =====================================================
+
+STANDARD_SCHEMA = {
+    'transaction_id': {'aliases': ['id', 'trans_id', 'transaction_number', 'txn_id'], 'required': False},
+    'amount': {'aliases': ['transaction_amount', 'value', 'total', 'sum'], 'required': True},
+    'department': {'aliases': ['dept', 'division', 'unit'], 'required': True},
+    'vendor': {'aliases': ['supplier', 'vendor_name', 'payee', 'merchant'], 'required': True},
+    'purpose': {'aliases': ['description', 'memo', 'notes', 'reason'], 'required': False},
+    'date': {'aliases': ['transaction_date', 'trans_date', 'date_of_transaction'], 'required': False},
+    'payment_method': {'aliases': ['payment_type', 'method'], 'required': False},
+    'approval_status': {'aliases': ['status', 'approval'], 'required': False}
+}
+
+
+# =====================================================
+# COLUMN AUTO-DETECTION
+# =====================================================
+
+def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     """
-    Automatically detect which columns map to standard fields using
-    keyword similarity and data type heuristics.
+    Automatically detect which columns map to standard schema
     
     Args:
-        df: Input dataframe with any column names
-    
+        df: Raw input DataFrame
+        
     Returns:
         Dictionary mapping standard fields to detected column names
-        Example: {
-            'transaction_id': 'ID',
-            'amount': 'Total_Amount',
-            'date': 'Transaction_Date',
-            'department': 'Dept',
-            'vendor': 'Supplier_Name',
-            'purpose': 'Description'
-        }
     """
-    detected = {
-        'transaction_id': None,
-        'amount': None,
-        'date': None,
-        'department': None,
-        'vendor': None,
-        'purpose': None
-    }
+    detected = {}
     
-    # Keywords for each field type
-    keywords = {
-        'transaction_id': ['id', 'transaction_id', 'txn_id', 'trans_id', 'receipt', 'reference', 'ref_no'],
-        'amount': ['amount', 'amt', 'total', 'value', 'price', 'cost', 'payment', 'sum'],
-        'date': ['date', 'datetime', 'timestamp', 'created', 'trans_date', 'transaction_date'],
-        'department': ['department', 'dept', 'division', 'unit', 'section', 'office'],
-        'vendor': ['vendor', 'supplier', 'payee', 'merchant', 'seller', 'company', 'provider'],
-        'purpose': ['purpose', 'description', 'desc', 'category', 'type', 'reason', 'memo', 'notes']
-    }
-    
-    columns_lower = {col: col.lower().replace('_', '').replace(' ', '') for col in df.columns}
-    
-    for field, field_keywords in keywords.items():
-        best_match = None
-        best_score = 0
+    for standard_field, config in STANDARD_SCHEMA.items():
+        # Check exact match first
+        if standard_field in df.columns:
+            detected[standard_field] = standard_field
+            continue
         
-        for col, col_clean in columns_lower.items():
-            # Calculate match score
-            score = 0
-            for keyword in field_keywords:
-                keyword_clean = keyword.replace('_', '').replace(' ', '')
-                if keyword_clean in col_clean:
-                    score += len(keyword_clean)
-                elif col_clean in keyword_clean:
-                    score += len(col_clean)
+        # Check aliases
+        for alias in config['aliases']:
+            if alias in df.columns:
+                detected[standard_field] = alias
+                break
             
-            # Boost score based on data type heuristics
-            if field == 'transaction_id' and _is_id_column(df[col]):
-                score += 10
-            elif field == 'amount' and _is_numeric_column(df[col]):
-                score += 10
-            elif field == 'date' and _is_date_column(df[col]):
-                score += 10
-            elif field in ['department', 'vendor', 'purpose'] and _is_categorical_column(df[col]):
-                score += 5
-            
-            if score > best_score:
-                best_score = score
-                best_match = col
-        
-        detected[field] = best_match if best_score > 0 else None
+            # Case-insensitive search
+            for col in df.columns:
+                if col.lower() == alias.lower():
+                    detected[standard_field] = col
+                    break
     
     return detected
 
 
-def _is_id_column(series: pd.Series) -> bool:
-    """Check if column is likely an ID (unique integers or strings)"""
-    try:
-        # Check if mostly numeric
-        numeric_series = pd.to_numeric(series, errors='coerce')
-        if numeric_series.notna().sum() / len(series) > 0.8:
-            # Check uniqueness
-            return series.nunique() / len(series) > 0.9
-    except:
-        pass
-    return False
+# =====================================================
+# DATA CLEANING
+# =====================================================
 
-
-def _is_numeric_column(series: pd.Series) -> bool:
-    """Check if column contains numeric values (possibly with currency symbols)"""
-    # Try to convert to numeric after removing common symbols
-    test_series = series.astype(str).str.replace(r'[$,€£¥]', '', regex=True).str.strip()
-    numeric_series = pd.to_numeric(test_series, errors='coerce')
-    return numeric_series.notna().sum() / len(series) > 0.7
-
-
-def _is_date_column(series: pd.Series) -> bool:
-    """Check if column contains date values"""
-    try:
-        date_series = pd.to_datetime(series, errors='coerce')
-        return date_series.notna().sum() / len(series) > 0.7
-    except:
-        return False
-
-
-def _is_categorical_column(series: pd.Series) -> bool:
-    """Check if column is categorical (limited unique values, text)"""
-    if series.dtype == 'object':
-        unique_ratio = series.nunique() / len(series)
-        return 0.01 < unique_ratio < 0.5  # Between 1% and 50% unique
-    return False
-
-
-# ==========================================
-# CLEAN DATASET
-# ==========================================
-def clean_dataset(df: pd.DataFrame, column_map: Dict[str, str]) -> pd.DataFrame:
+def clean_dataset(df: pd.DataFrame, column_mapping: Dict[str, str]) -> pd.DataFrame:
     """
-    Clean and standardize dataset based on column mappings.
-    
-    Fixes:
-    - Currency symbols in amount columns
-    - Commas in numbers
-    - Invalid dates
-    - Empty strings to NaN
-    - Trims whitespace
-    - Standardizes column names
+    Clean and standardize dataset
     
     Args:
-        df: Raw dataframe
-        column_map: Dictionary mapping standard fields to actual column names
-                   Example: {'amount': 'Total_Amount', 'date': 'Trans_Date'}
-    
+        df: Raw DataFrame
+        column_mapping: Mapping of standard fields to actual column names
+        
     Returns:
-        Cleaned dataframe with standardized column names
+        Cleaned DataFrame with standardized column names
     """
     df_clean = df.copy()
     
-    # Step 1: Rename columns to standard names
-    rename_map = {v: k for k, v in column_map.items() if v is not None}
-    df_clean = df_clean.rename(columns=rename_map)
-    # 🚨 Fix duplicate columns created after renaming
-    if df_clean.columns.duplicated().any():
-        print("Warning: duplicate columns after schema mapping — keeping first occurrence")
-        df_clean = df_clean.loc[:, ~df_clean.columns.duplicated()]
-
+    # Rename columns to standard names
+    rename_dict = {v: k for k, v in column_mapping.items() if v in df.columns}
+    df_clean = df_clean.rename(columns=rename_dict)
     
-    # Step 2: Clean each field type
-    
-    # Transaction ID
-    if 'transaction_id' in df_clean.columns:
-        df_clean['transaction_id'] = _clean_id_column(df_clean['transaction_id'])
-    else:
-        # Generate transaction IDs if missing
-        df_clean['transaction_id'] = range(len(df_clean))
-    
-    # Amount
+    # Clean amount column
     if 'amount' in df_clean.columns:
-        df_clean['amount'] = _clean_amount_column(df_clean['amount'])
+        df_clean['amount'] = pd.to_numeric(df_clean['amount'], errors='coerce')
+        df_clean['amount'] = df_clean['amount'].fillna(0)
     
-    # Date
+    # Clean date column
     if 'date' in df_clean.columns:
-        df_clean['date'] = _clean_date_column(df_clean['date'])
+        df_clean['date'] = pd.to_datetime(df_clean['date'], errors='coerce')
+        # Fill missing dates with today's date
+        df_clean['date'] = df_clean['date'].fillna(pd.Timestamp.now())
     
-    # Text fields (department, vendor, purpose)
-    for field in ['department', 'vendor', 'purpose']:
-        if field in df_clean.columns:
-            df_clean[field] = _clean_text_column(df_clean[field])
-    
-    # Step 3: Replace empty strings with NaN globally
-    df_clean = df_clean.replace(r'^\s*$', np.nan, regex=True)
-    
-    # Step 4: Remove leading/trailing whitespace from all object columns
-    for col in df_clean.select_dtypes(include=['object']).columns:
-        df_clean[col] = df_clean[col].astype(str).str.strip()
-        df_clean[col] = df_clean[col].replace('nan', np.nan)
+    # Clean text columns
+    text_cols = ['department', 'vendor', 'purpose', 'payment_method', 'approval_status']
+    for col in text_cols:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].fillna('Unknown')
+            df_clean[col] = df_clean[col].astype(str).str.strip()
     
     return df_clean
 
 
-def _clean_id_column(series: pd.Series) -> pd.Series:
-    """Clean ID column - ensure integer values"""
-    try:
-        # Try to convert to numeric
-        numeric_series = pd.to_numeric(series, errors='coerce')
-        
-        # Fill NaN with sequential IDs
-        mask = numeric_series.isna()
-        if mask.any():
-            max_id = numeric_series.max() if numeric_series.notna().any() else 0
-            numeric_series[mask] = range(int(max_id) + 1, int(max_id) + 1 + mask.sum())
-        
-        return numeric_series.astype(int)
-    except:
-        # If conversion fails, return sequential IDs
-        return pd.Series(range(len(series)))
+# =====================================================
+# DATA QUALITY & VALIDATION LAYER (NEW)
+# =====================================================
 
-
-def _clean_amount_column(series: pd.Series) -> pd.Series:
+def validate_data_quality(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Clean amount column - remove currency symbols, commas, convert to float
+    Validate data quality and add quality flags and scores.
     
-    Handles:
-    - $1,234.56
-    - €1.234,56 (European format)
-    - £1,234
-    - 1234.56
-    """
-    cleaned = series.astype(str).copy()
+    This function detects data quality issues including:
+    - Missing critical fields (amount, department, vendor)
+    - Negative amounts
+    - Extreme outliers (top 1% amounts)
     
-    # Remove currency symbols
-    cleaned = cleaned.str.replace(r'[$€£¥₹]', '', regex=True)
+    Adds columns:
+    - data_quality_flags: List of quality issues detected
+    - data_quality_score: Risk score (0-100) where higher = more issues
     
-    # Remove whitespace
-    cleaned = cleaned.str.strip()
-    
-    # Detect European format (1.234,56) vs US format (1,234.56)
-    # If more periods than commas, likely European
-    sample = cleaned.head(100)
-    period_count = sample.str.count(r'\.').sum()
-    comma_count = sample.str.count(',').sum()
-    
-    if comma_count > period_count:
-        # Likely European format - swap comma and period
-        cleaned = cleaned.str.replace('.', '', regex=False)  # Remove thousand separator
-        cleaned = cleaned.str.replace(',', '.', regex=False)  # Decimal separator
-    else:
-        # US format - remove commas
-        cleaned = cleaned.str.replace(',', '', regex=False)
-    
-    # Convert to float
-    numeric_series = pd.to_numeric(cleaned, errors='coerce')
-    
-    # Replace negative values with absolute (assuming amounts are positive)
-    numeric_series = numeric_series.abs()
-    
-    return numeric_series
-
-
-def _clean_date_column(series: pd.Series) -> pd.Series:
-    """
-    Clean date column - parse various date formats
-    
-    Handles:
-    - YYYY-MM-DD
-    - MM/DD/YYYY
-    - DD/MM/YYYY
-    - Various other formats
-    """
-    # Try pandas automatic parsing
-    date_series = pd.to_datetime(series, errors='coerce', infer_datetime_format=True)
-    
-    # If too many NaT values, try alternative formats
-    if date_series.isna().sum() / len(date_series) > 0.3:
-        # Try common formats explicitly
-        formats = [
-            '%Y-%m-%d',
-            '%m/%d/%Y',
-            '%d/%m/%Y',
-            '%Y/%m/%d',
-            '%d-%m-%Y',
-            '%m-%d-%Y',
-            '%d.%m.%Y',
-            '%Y%m%d'
-        ]
-        
-        for fmt in formats:
-            try:
-                alt_series = pd.to_datetime(series, format=fmt, errors='coerce')
-                if alt_series.notna().sum() > date_series.notna().sum():
-                    date_series = alt_series
-            except:
-                continue
-    
-    return date_series
-
-
-def _clean_text_column(series: pd.Series) -> pd.Series:
-    """Clean text columns - trim, standardize, handle nulls"""
-    cleaned = series.astype(str).copy()
-    
-    # Trim whitespace
-    cleaned = cleaned.str.strip()
-    
-    # Replace common null representations
-    null_values = ['nan', 'null', 'none', 'n/a', 'na', '', 'unknown', '-']
-    cleaned = cleaned.replace(null_values, np.nan)
-    
-    # Standardize case (title case)
-    cleaned = cleaned.str.title()
-    
-    return cleaned
-
-
-# ==========================================
-# COMPUTE HEALTH SCORE
-# ==========================================
-def compute_health_score(df: pd.DataFrame) -> Dict[str, float]:
-    """
-    Compute comprehensive data health metrics.
+    Scoring:
+    - Missing critical field: +40 points
+    - Negative amount: +50 points
+    - Extreme outlier: +30 points
     
     Args:
-        df: Dataframe to analyze
-    
+        df: DataFrame to validate
+        
     Returns:
-        Dictionary with health metrics:
-        {
-            "completeness": 85.5,      # % of non-null values
-            "validity": 92.3,          # % of values with correct datatypes
-            "duplicates": 15,          # Count of duplicate rows
-            "consistency": 88.0,       # % of consistent values (no outliers)
-            "overall_score": 87.2      # Weighted average (0-100)
-        }
+        DataFrame with quality flags and scores
     """
-    total_cells = df.size
-    total_rows = len(df)
+    df_validated = df.copy()
     
-    # 1. Completeness Score (% non-null)
-    non_null_cells = df.notna().sum().sum()
-    completeness = (non_null_cells / total_cells * 100) if total_cells > 0 else 0
+    # Initialize quality columns
+    df_validated['data_quality_flags'] = [[] for _ in range(len(df_validated))]
+    df_validated['data_quality_score'] = 0
     
-    # 2. Validity Score (% correct datatypes)
-    validity_scores = []
+    critical_fields = ['amount', 'department', 'vendor']
     
-    # Check transaction_id
-    if 'transaction_id' in df.columns:
+    # Rule 1: Missing Critical Fields
+    for field in critical_fields:
+        if field in df_validated.columns:
+            # Check for missing values
+            missing_mask = df_validated[field].isna() | (df_validated[field] == '') | (df_validated[field] == 'Unknown')
+            
+            for idx in df_validated[missing_mask].index:
+                df_validated.at[idx, 'data_quality_flags'].append(f"Missing critical field: {field}")
+                df_validated.at[idx, 'data_quality_score'] += 40
+        else:
+            # Field doesn't exist in dataframe
+            for idx in df_validated.index:
+                df_validated.at[idx, 'data_quality_flags'].append(f"Missing critical field: {field}")
+                df_validated.at[idx, 'data_quality_score'] += 40
+    
+    # Rule 2: Negative Amounts
+    if 'amount' in df_validated.columns:
+        negative_mask = df_validated['amount'] < 0
+        
+        for idx in df_validated[negative_mask].index:
+            df_validated.at[idx, 'data_quality_flags'].append("Negative amount detected")
+            df_validated.at[idx, 'data_quality_score'] += 50
+    
+    # Rule 3: Extreme Outliers (Top 1%)
+    if 'amount' in df_validated.columns:
         try:
-            valid = pd.to_numeric(df['transaction_id'], errors='coerce').notna().sum()
-            validity_scores.append(valid / len(df) * 100)
-        except:
-            validity_scores.append(0)
+            # Calculate 99th percentile threshold
+            threshold = df_validated['amount'].quantile(0.99)
+            
+            # Identify extreme outliers
+            outlier_mask = df_validated['amount'] > threshold
+            
+            for idx in df_validated[outlier_mask].index:
+                df_validated.at[idx, 'data_quality_flags'].append(f"Extreme amount outlier (>${threshold:,.2f})")
+                df_validated.at[idx, 'data_quality_score'] += 30
+        except Exception as e:
+            print(f"Warning: Could not calculate outlier threshold - {e}")
     
-    # Check amount
-    if 'amount' in df.columns:
-        try:
-            valid = pd.to_numeric(df['amount'], errors='coerce').notna().sum()
-            validity_scores.append(valid / len(df) * 100)
-        except:
-            validity_scores.append(0)
+    # Cap score at 100
+    df_validated['data_quality_score'] = df_validated['data_quality_score'].clip(upper=100)
     
-    # Check date
-    if 'date' in df.columns:
-        try:
-            valid = pd.to_datetime(df['date'], errors='coerce').notna().sum()
-            validity_scores.append(valid / len(df) * 100)
-        except:
-            validity_scores.append(0)
+    # Debug prints
+    print(f"Data quality validation complete:")
+    print(f"  - Total records validated: {len(df_validated)}")
+    print(f"  - Records with quality issues: {(df_validated['data_quality_score'] > 0).sum()}")
+    print(f"  - Data quality max score: {df_validated['data_quality_score'].max()}")
+    print(f"  - Data quality mean score: {df_validated['data_quality_score'].mean():.2f}")
     
-    validity = np.mean(validity_scores) if validity_scores else 100
-    
-    # 3. Duplicate Count
-    duplicates = df.duplicated().sum()
-    duplicate_score = max(0, 100 - (duplicates / total_rows * 100)) if total_rows > 0 else 100
-    
-    # 4. Consistency Score (outlier detection for numeric columns)
-    consistency_scores = []
-    
-    if 'amount' in df.columns:
-        try:
-            amounts = pd.to_numeric(df['amount'], errors='coerce').dropna()
-            if len(amounts) > 0:
-                z_scores = np.abs(stats.zscore(amounts))
-                outliers = (z_scores > 3).sum()
-                consistency_scores.append(max(0, 100 - (outliers / len(amounts) * 100)))
-        except:
-            pass
-    
-    consistency = np.mean(consistency_scores) if consistency_scores else 100
-    
-    # 5. Overall Score (weighted average)
-    overall_score = (
-        completeness * 0.4 +      # 40% weight on completeness
-        validity * 0.3 +           # 30% weight on validity
-        duplicate_score * 0.15 +   # 15% weight on duplicates
-        consistency * 0.15         # 15% weight on consistency
-    )
-    
-    return {
-        "completeness": round(completeness, 2),
-        "validity": round(validity, 2),
-        "duplicates": int(duplicates),
-        "consistency": round(consistency, 2),
-        "overall_score": round(overall_score, 2)
-    }
+    return df_validated
 
 
-# ==========================================
-# ENRICH FEATURES
-# ==========================================
+# =====================================================
+# FEATURE ENRICHMENT
+# =====================================================
+
 def enrich_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add derived features for enhanced ML analysis.
-    
-    Adds:
-    - monthly_spend_per_department: Total spending per department per month
-    - vendor_transaction_count: Number of transactions per vendor
-    - zscore_amount: Z-score of transaction amount (for outlier detection)
-    - amount_percentile: Percentile rank of transaction amount
+    Add derived features for better anomaly detection
     
     Args:
-        df: Cleaned dataframe
-    
+        df: Cleaned DataFrame
+        
     Returns:
-        Dataframe with additional enriched features
+        DataFrame with additional engineered features
     """
     df_enriched = df.copy()
     
     # Feature 1: Monthly spend per department
-    if 'department' in df.columns and 'amount' in df.columns and 'date' in df.columns:
-        try:
-            # Extract year-month
-            df_enriched['year_month'] = pd.to_datetime(df_enriched['date'], errors='coerce').dt.to_period('M')
-            
-            # Calculate monthly spend per department
-            monthly_dept_spend = df_enriched.groupby(['department', 'year_month'])['amount'].transform('sum')
-            df_enriched['monthly_spend_per_department'] = monthly_dept_spend
-            
-            # Drop temporary column
-            df_enriched = df_enriched.drop('year_month', axis=1)
-        except Exception as e:
-            print(f"Warning: Could not compute monthly_spend_per_department: {e}")
-            df_enriched['monthly_spend_per_department'] = np.nan
-    else:
-        df_enriched['monthly_spend_per_department'] = np.nan
+    if 'amount' in df_enriched.columns and 'department' in df_enriched.columns:
+        df_enriched['monthly_spend_per_department'] = df_enriched.groupby('department')['amount'].transform('sum')
     
     # Feature 2: Vendor transaction count
-    if 'vendor' in df.columns:
-        try:
-            vendor_counts = df_enriched.groupby('vendor')['vendor'].transform('count')
-            df_enriched['vendor_transaction_count'] = vendor_counts
-        except Exception as e:
-            print(f"Warning: Could not compute vendor_transaction_count: {e}")
-            df_enriched['vendor_transaction_count'] = np.nan
-    else:
-        df_enriched['vendor_transaction_count'] = np.nan
+    if 'vendor' in df_enriched.columns:
+        df_enriched['vendor_transaction_count'] = df_enriched.groupby('vendor')['vendor'].transform('count')
     
-    # Feature 3: Z-score of amount (standardized)
-    if 'amount' in df.columns:
-        try:
-            amounts = pd.to_numeric(df_enriched['amount'], errors='coerce')
-            
-            # Only compute z-scores for valid amounts
-            valid_amounts = amounts.dropna()
-            if len(valid_amounts) > 0 and valid_amounts.std() > 0:
-                z_scores = (amounts - amounts.mean()) / amounts.std()
-                df_enriched['zscore_amount'] = z_scores
-            else:
-                df_enriched['zscore_amount'] = 0
-        except Exception as e:
-            print(f"Warning: Could not compute zscore_amount: {e}")
-            df_enriched['zscore_amount'] = np.nan
-    else:
-        df_enriched['zscore_amount'] = np.nan
+    # Feature 3: Z-score of amount
+    if 'amount' in df_enriched.columns:
+        mean_amount = df_enriched['amount'].mean()
+        std_amount = df_enriched['amount'].std()
+        
+        if std_amount > 0:
+            df_enriched['zscore_amount'] = (df_enriched['amount'] - mean_amount) / std_amount
+        else:
+            df_enriched['zscore_amount'] = 0
     
     # Feature 4: Amount percentile
-    if 'amount' in df.columns:
-        try:
-            amounts = pd.to_numeric(df_enriched['amount'], errors='coerce')
-            percentiles = amounts.rank(pct=True) * 100
-            df_enriched['amount_percentile'] = percentiles
-        except Exception as e:
-            print(f"Warning: Could not compute amount_percentile: {e}")
-            df_enriched['amount_percentile'] = np.nan
-    else:
-        df_enriched['amount_percentile'] = np.nan
+    if 'amount' in df_enriched.columns:
+        df_enriched['amount_percentile'] = df_enriched['amount'].rank(pct=True) * 100
     
-    # Feature 5: Transaction day of week (0=Monday, 6=Sunday)
-    if 'date' in df.columns:
-        try:
-            dates = pd.to_datetime(df_enriched['date'], errors='coerce')
-            df_enriched['day_of_week'] = dates.dt.dayofweek
-            df_enriched['is_weekend'] = (dates.dt.dayofweek >= 5).astype(int)
-        except Exception as e:
-            print(f"Warning: Could not compute date features: {e}")
-            df_enriched['day_of_week'] = np.nan
-            df_enriched['is_weekend'] = np.nan
-    else:
-        df_enriched['day_of_week'] = np.nan
-        df_enriched['is_weekend'] = np.nan
+    # Feature 5: Day of week (if date exists)
+    if 'date' in df_enriched.columns:
+        df_enriched['day_of_week'] = pd.to_datetime(df_enriched['date']).dt.dayofweek
+        df_enriched['is_weekend'] = df_enriched['day_of_week'].isin([5, 6]).astype(int)
     
     return df_enriched
 
 
-# ==========================================
+# =====================================================
+# HEALTH SCORE CALCULATION
+# =====================================================
+
+def compute_health_score(df: pd.DataFrame) -> Dict:
+    """
+    Calculate data quality health metrics
+    
+    Args:
+        df: DataFrame to analyze
+        
+    Returns:
+        Dictionary with health metrics
+    """
+    total_rows = len(df)
+    total_cells = df.size
+    
+    # Completeness: % of non-null values
+    non_null = df.count().sum()
+    completeness = (non_null / total_cells * 100) if total_cells > 0 else 0
+    
+    # Validity: % of valid amounts (non-negative, non-zero)
+    valid_amounts = 0
+    if 'amount' in df.columns:
+        valid_amounts = ((df['amount'] > 0) & (df['amount'].notna())).sum()
+        validity = (valid_amounts / total_rows * 100) if total_rows > 0 else 0
+    else:
+        validity = 0
+    
+    # Duplicates
+    duplicates = df.duplicated().sum()
+    
+    # Overall score (weighted average)
+    overall_score = (completeness * 0.4 + validity * 0.4 + (100 - (duplicates / total_rows * 100) if total_rows > 0 else 100) * 0.2)
+    
+    return {
+        'completeness': round(completeness, 2),
+        'validity': round(validity, 2),
+        'duplicates': int(duplicates),
+        'overall_score': round(overall_score, 2)
+    }
+
+
+# =====================================================
 # COMPLETE PIPELINE
-# ==========================================
-def run_complete_pipeline(df: pd.DataFrame, column_map: Optional[Dict[str, str]] = None):
+# =====================================================
 
-    # 🚨 Fix duplicate columns (dirty real-world datasets)
-    if df.columns.duplicated().any():
-        print("Warning: duplicate columns detected and removed")
-
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    # Step 1: Auto-detect columns if not provided
-    if column_map is None:
-        column_map = auto_detect_columns(df)
-
+def run_complete_pipeline(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Run complete data pipeline: detect, clean, validate, enrich, and score
+    Enhanced with data quality validation layer
+    
+    Args:
+        df: Raw input DataFrame
+        
+    Returns:
+        Tuple of (processed DataFrame, health metrics dictionary)
+    """
+    print("Starting complete data pipeline...")
+    
+    # Step 1: Auto-detect columns
+    print("Step 1/5: Auto-detecting columns...")
+    column_mapping = auto_detect_columns(df)
+    print(f"  Detected {len(column_mapping)} standard fields")
+    
     # Step 2: Clean dataset
-    df_clean = clean_dataset(df, column_map)
+    print("Step 2/5: Cleaning dataset...")
+    df_clean = clean_dataset(df, column_mapping)
+    print(f"  Cleaned {len(df_clean)} records")
+    
+    # Step 3: Validate data quality (NEW)
+    print("Step 3/5: Validating data quality...")
+    df_validated = validate_data_quality(df_clean)
+    
+    # Step 4: Enrich with features
+    print("Step 4/5: Enriching features...")
+    df_enriched = enrich_features(df_validated)
 
-    # Step 3: Enrich with features
-    df_enriched = enrich_features(df_clean)
+    # Add transaction_id if missing
+    if 'transaction_id' not in df_enriched.columns:
+        df_enriched['transaction_id'] = range(1, len(df_enriched) + 1)
 
-    # Step 4: Compute health score
+    # 🔥 Convert list flags BEFORE computing health score
+    if 'data_quality_flags' in df_enriched.columns:
+        df_enriched['data_quality_flags'] = df_enriched['data_quality_flags'].apply(
+        lambda x: '; '.join(x) if isinstance(x, list) and x else 'No issues'
+        )
+
+    # Step 5: Compute health score
+    print("Step 5/5: Computing health score...")
     health = compute_health_score(df_enriched)
-
+    # Convert lists to strings for database compatibility
+    # Convert list flags to string and DROP list column
+    if 'data_quality_flags' in df_enriched.columns:
+        df_enriched['data_quality_flags'] = df_enriched['data_quality_flags'].apply(
+        lambda x: '; '.join(x) if isinstance(x, list) and x else 'No issues'
+        )
+        # Keep the list version for in-memory processing, but add string version for DB
+    
+    print("Pipeline complete!")
+    print(f"Final dataset: {len(df_enriched)} rows, {len(df_enriched.columns)} columns")
+    
     return df_enriched, health
 
 
-# ==========================================
-# HELPER: VALIDATE PIPELINE OUTPUT
-# ==========================================
-def validate_pipeline_output(df: pd.DataFrame) -> Tuple[bool, list]:
+# =====================================================
+# VALIDATION
+# =====================================================
+
+def validate_pipeline_output(df: pd.DataFrame) -> Tuple[bool, List[str]]:
     """
-    Validate that pipeline output has required fields for ML.
+    Validate pipeline output meets requirements
     
     Args:
-        df: Pipeline output dataframe
-    
+        df: Processed DataFrame
+        
     Returns:
-        Tuple of (is_valid, list_of_issues)
+        Tuple of (is_valid: bool, issues: List[str])
     """
     issues = []
     
     # Check required columns
-    required = ['transaction_id', 'amount']
-    for col in required:
-        if col not in df.columns:
-            issues.append(f"Missing required column: {col}")
-        elif df[col].isna().all():
-            issues.append(f"Column '{col}' has all null values")
+    required_cols = ['transaction_id', 'amount', 'department', 'vendor']
+    missing_cols = [col for col in required_cols if col not in df.columns]
     
-    # Check minimum rows
-    if len(df) < 10:
-        issues.append(f"Dataset too small: {len(df)} rows (minimum 10 required)")
+    if missing_cols:
+        issues.append(f"Missing required columns: {', '.join(missing_cols)}")
     
-    # Check amount validity
+    # Check for enriched features
+    enriched_features = ['monthly_spend_per_department', 'vendor_transaction_count', 'zscore_amount']
+    missing_features = [feat for feat in enriched_features if feat not in df.columns]
+    
+    if missing_features:
+        issues.append(f"Missing enriched features: {', '.join(missing_features)}")
+    
+    # Check for data quality columns
+    quality_cols = ['data_quality_flags', 'data_quality_score']
+    missing_quality = [col for col in quality_cols if col not in df.columns]
+    
+    if missing_quality:
+        issues.append(f"Missing data quality columns: {', '.join(missing_quality)}")
+    
+    # Check for nulls in critical columns
     if 'amount' in df.columns:
-        valid_amounts = pd.to_numeric(df['amount'], errors='coerce').notna().sum()
-        if valid_amounts / len(df) < 0.5:
-            issues.append(f"Less than 50% valid amounts ({valid_amounts}/{len(df)})")
+        null_amounts = df['amount'].isna().sum()
+        if null_amounts > 0:
+            issues.append(f"{null_amounts} null values in amount column")
     
     is_valid = len(issues) == 0
+    
     return is_valid, issues
+
+
+# =====================================================
+# UTILITY FUNCTIONS
+# =====================================================
+
+def get_pipeline_info() -> Dict:
+    """
+    Get information about pipeline capabilities
+    
+    Returns:
+        Dictionary with pipeline information
+    """
+    return {
+        'version': '2.0.0',
+        'features': [
+            'Auto column detection',
+            'Data cleaning',
+            'Data quality validation',
+            'Feature enrichment',
+            'Health scoring',
+            'Quality flags and scores'
+        ],
+        'standard_schema': list(STANDARD_SCHEMA.keys()),
+        'enriched_features': [
+            'monthly_spend_per_department',
+            'vendor_transaction_count',
+            'zscore_amount',
+            'amount_percentile',
+            'day_of_week',
+            'is_weekend',
+            'data_quality_flags',
+            'data_quality_score'
+        ],
+        'quality_checks': [
+            'Missing critical fields',
+            'Negative amounts',
+            'Extreme outliers (top 1%)'
+        ]
+    }
+
+
+def convert_lists_to_strings(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert any list columns to string format for database storage.
+    This prevents unhashable type errors when saving to database.
+    
+    Args:
+        df: DataFrame with potential list columns
+        
+    Returns:
+        DataFrame with lists converted to strings
+    """
+    df_converted = df.copy()
+    
+    for col in df_converted.columns:
+        # Check if column contains lists
+        if df_converted[col].dtype == 'object':
+            # Check first non-null value
+            first_value = df_converted[col].dropna().iloc[0] if len(df_converted[col].dropna()) > 0 else None
+            
+            if isinstance(first_value, list):
+                # Convert list to semicolon-separated string
+                df_converted[col] = df_converted[col].apply(
+                    lambda x: '; '.join(map(str, x)) if isinstance(x, list) and x else 'None'
+                )
+                print(f"Converted column '{col}' from list to string format")
+    
+    return df_converted
+
+
+def prepare_for_database(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prepare DataFrame for database insertion by converting incompatible types.
+    
+    Args:
+        df: Processed DataFrame
+        
+    Returns:
+        Database-ready DataFrame
+    """
+    df_db = df.copy()
+    
+    # Convert data_quality_flags list to string if it exists
+    if 'data_quality_flags' in df_db.columns:
+        df_db['data_quality_flags'] = df_db['data_quality_flags'].apply(
+            lambda x: '; '.join(x) if isinstance(x, list) and x else 'No issues'
+        )
+    
+    # Convert any remaining list columns
+    df_db = convert_lists_to_strings(df_db)
+    
+    # Convert dates to ISO format strings
+    if 'date' in df_db.columns:
+        df_db['date'] = df_db['date'].apply(
+            lambda x: x.isoformat() if pd.notna(x) else None
+        )
+    
+    print("DataFrame prepared for database storage")
+    
+    return df_db
+
+
+def get_data_quality_summary(df: pd.DataFrame) -> Dict:
+    """
+    Get summary of data quality issues.
+    
+    Args:
+        df: DataFrame with data_quality_flags and data_quality_score
+        
+    Returns:
+        Dictionary with quality summary
+    """
+    if 'data_quality_score' not in df.columns:
+        return {
+            'total_records': len(df),
+            'records_with_issues': 0,
+            'max_quality_score': 0,
+            'mean_quality_score': 0,
+            'common_issues': []
+        }
+    
+    records_with_issues = (df['data_quality_score'] > 0).sum()
+    max_score = df['data_quality_score'].max()
+    mean_score = df['data_quality_score'].mean()
+    
+    # Get common issues
+    common_issues = []
+    if 'data_quality_flags' in df.columns:
+        all_flags = []
+        for flags in df['data_quality_flags']:
+            if isinstance(flags, list):
+                all_flags.extend(flags)
+        
+        if all_flags:
+            from collections import Counter
+            flag_counts = Counter(all_flags)
+            common_issues = [{'issue': issue, 'count': count} for issue, count in flag_counts.most_common(5)]
+    
+    return {
+        'total_records': len(df),
+        'records_with_issues': int(records_with_issues),
+        'max_quality_score': float(max_score),
+        'mean_quality_score': round(float(mean_score), 2),
+        'common_issues': common_issues
+    }
+
+
+# =====================================================
+# EXAMPLE USAGE
+# =====================================================
+
+if __name__ == "__main__":
+    print("Data Pipeline Module Loaded")
+    print(f"Version: {get_pipeline_info()['version']}")
+    print(f"Features: {', '.join(get_pipeline_info()['features'])}")
+    print(f"Quality Checks: {', '.join(get_pipeline_info()['quality_checks'])}")
