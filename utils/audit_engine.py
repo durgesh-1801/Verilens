@@ -1,7 +1,7 @@
 """
 Audit Rule Engine
 Intelligent auditing layer that applies rule-based logic to detect suspicious transactions.
-This module works on DataFrames after pipeline processing and adds audit intelligence.
+Enhanced with reasoning categories, risk categorization, and explainable audit intelligence.
 """
 
 import pandas as pd
@@ -22,9 +22,16 @@ RULE_WEIGHTS = {
 
 # Severity thresholds
 SEVERITY_THRESHOLDS = {
-    'Low': (0, 30),
-    'Medium': (31, 70),
-    'High': (71, 100)
+    'Low': (0, 25),
+    'Medium': (26, 50),
+    'High': (51, 100)
+}
+
+# Risk category mapping
+RISK_CATEGORIES = {
+    'Financial Risk': ['High Amount Outlier', 'Potential duplicate pattern'],
+    'Behavioral Risk': ['Vendor unusually frequent', 'Transaction executed on weekend'],
+    'Statistical Risk': ['Statistical anomaly detected']
 }
 
 
@@ -35,11 +42,15 @@ SEVERITY_THRESHOLDS = {
 def generate_audit_flags(df: pd.DataFrame) -> pd.DataFrame:
     """
     Apply audit rules to a DataFrame and generate audit flags with risk scores.
+    Enhanced with reasoning categories and explanations.
     
     This function processes transactions after the data pipeline and adds:
     - audit_flags: List of human-readable audit reasons
     - audit_risk_score: Numerical risk score (0-100)
     - audit_severity: Categorical severity ("Low", "Medium", "High")
+    - audit_reasoning_score: Category-based risk breakdown
+    - audit_category: Primary risk category
+    - audit_explanation: Human-readable explanation
     
     Args:
         df: DataFrame with processed transaction data
@@ -57,7 +68,9 @@ def generate_audit_flags(df: pd.DataFrame) -> pd.DataFrame:
     # Initialize audit columns
     df_audit['audit_flags'] = [[] for _ in range(len(df_audit))]
     df_audit['audit_risk_score'] = 0
-    
+    df_audit['financial_risk_score'] = 0
+    df_audit['behavioral_risk_score'] = 0
+    df_audit['statistical_risk_score'] = 0    
     # Apply each audit rule
     df_audit = _apply_high_amount_outlier_rule(df_audit)
     df_audit = _apply_frequent_vendor_rule(df_audit)
@@ -66,19 +79,35 @@ def generate_audit_flags(df: pd.DataFrame) -> pd.DataFrame:
     df_audit = _apply_duplicate_suspicion_rule(df_audit)
     
     # Cap risk score at 100
+    # Combine category scores into total risk score
+    df_audit['audit_risk_score'] = (
+    df_audit['financial_risk_score'] +
+    df_audit['behavioral_risk_score'] +
+    df_audit['statistical_risk_score']
+    )
+
+    # Cap risk score at 100
     df_audit['audit_risk_score'] = df_audit['audit_risk_score'].clip(upper=100)
-    
+    print("Max risk score:", df_audit['audit_risk_score'].max())
+    print("Unique risk scores:", df_audit['audit_risk_score'].unique())
     # Assign severity based on risk score
     df_audit['audit_severity'] = df_audit['audit_risk_score'].apply(_calculate_severity)
-    # ✅ Convert list flags to string (prevents pandas hashing errors)
+    
+    # Determine primary audit category
+    df_audit['audit_category'] = df_audit.apply(_determine_primary_category, axis=1)
+    
+    # Generate human-readable explanations
+    df_audit['audit_explanation'] = df_audit.apply(
+        lambda row: generate_audit_explanation(row), axis=1
+    )
     df_audit['audit_flags'] = df_audit['audit_flags'].apply(
-    lambda x: '; '.join(x) if isinstance(x, list) else str(x)
+    lambda x: '; '.join(x) if isinstance(x, list) else x
     )
     return df_audit
 
 
 # =====================================================
-# INDIVIDUAL AUDIT RULES
+# INDIVIDUAL AUDIT RULES (ENHANCED WITH CATEGORIES)
 # =====================================================
 
 def _apply_high_amount_outlier_rule(df: pd.DataFrame) -> pd.DataFrame:
@@ -89,6 +118,7 @@ def _apply_high_amount_outlier_rule(df: pd.DataFrame) -> pd.DataFrame:
     This indicates potentially inflated or fraudulent expenditures.
     
     Risk Level: Major (40 points)
+    Category: Financial Risk
     """
     if 'amount' not in df.columns or 'department' not in df.columns:
         return df
@@ -103,7 +133,9 @@ def _apply_high_amount_outlier_rule(df: pd.DataFrame) -> pd.DataFrame:
         # Add flags and scores for outliers
         for idx in df[outlier_mask].index:
             df.at[idx, 'audit_flags'].append("Amount significantly higher than department norm")
-            df.at[idx, 'audit_risk_score'] += RULE_WEIGHTS['major']
+            df.at[idx, 'financial_risk_score'] += RULE_WEIGHTS['major']
+            
+            
     
     except Exception as e:
         print(f"Warning: High amount outlier rule failed - {e}")
@@ -122,6 +154,7 @@ def _apply_frequent_vendor_rule(df: pd.DataFrame) -> pd.DataFrame:
     - Kickback schemes
     
     Risk Level: Medium (25 points)
+    Category: Behavioral Risk
     """
     if 'vendor_transaction_count' not in df.columns:
         return df
@@ -136,7 +169,9 @@ def _apply_frequent_vendor_rule(df: pd.DataFrame) -> pd.DataFrame:
         # Add flags and scores
         for idx in df[frequent_mask].index:
             df.at[idx, 'audit_flags'].append("Vendor unusually frequent")
-            df.at[idx, 'audit_risk_score'] += RULE_WEIGHTS['medium']
+            df.at[idx, 'behavioral_risk_score'] += RULE_WEIGHTS['medium']
+            
+            
     
     except Exception as e:
         print(f"Warning: Frequent vendor rule failed - {e}")
@@ -156,6 +191,7 @@ def _apply_weekend_transaction_rule(df: pd.DataFrame) -> pd.DataFrame:
     - After-hours fraud
     
     Risk Level: Minor (15 points)
+    Category: Behavioral Risk
     """
     if 'is_weekend' not in df.columns:
         return df
@@ -167,7 +203,9 @@ def _apply_weekend_transaction_rule(df: pd.DataFrame) -> pd.DataFrame:
         # Add flags and scores
         for idx in df[weekend_mask].index:
             df.at[idx, 'audit_flags'].append("Transaction executed on weekend")
-            df.at[idx, 'audit_risk_score'] += RULE_WEIGHTS['minor']
+            df.at[idx, 'behavioral_risk_score'] += RULE_WEIGHTS['minor']
+            
+            
     
     except Exception as e:
         print(f"Warning: Weekend transaction rule failed - {e}")
@@ -184,6 +222,7 @@ def _apply_zscore_anomaly_rule(df: pd.DataFrame) -> pd.DataFrame:
     Values beyond ±2 are statistically rare (occur in ~5% of normal distributions).
     
     Risk Level: Major (40 points)
+    Category: Statistical Risk
     """
     if 'zscore_amount' not in df.columns:
         return df
@@ -195,7 +234,9 @@ def _apply_zscore_anomaly_rule(df: pd.DataFrame) -> pd.DataFrame:
         # Add flags and scores
         for idx in df[anomaly_mask].index:
             df.at[idx, 'audit_flags'].append("Statistical anomaly detected")
-            df.at[idx, 'audit_risk_score'] += RULE_WEIGHTS['major']
+            df.at[idx, 'statistical_risk_score'] += RULE_WEIGHTS['major']
+            
+            
     
     except Exception as e:
         print(f"Warning: Z-score anomaly rule failed - {e}")
@@ -216,6 +257,7 @@ def _apply_duplicate_suspicion_rule(df: pd.DataFrame) -> pd.DataFrame:
     Checks for duplicates across: amount, vendor, purpose, department
     
     Risk Level: Medium (25 points)
+    Category: Financial Risk
     """
     required_cols = ['amount', 'vendor', 'purpose', 'department']
     
@@ -225,13 +267,14 @@ def _apply_duplicate_suspicion_rule(df: pd.DataFrame) -> pd.DataFrame:
     
     try:
         # Identify duplicate patterns
-        # Duplicates are defined as rows with identical values across key fields
         duplicate_mask = df.duplicated(subset=required_cols, keep=False)
         
         # Add flags and scores for duplicates
         for idx in df[duplicate_mask].index:
             df.at[idx, 'audit_flags'].append("Potential duplicate pattern")
-            df.at[idx, 'audit_risk_score'] += RULE_WEIGHTS['medium']
+            df.at[idx, 'statistical_risk_score'] += RULE_WEIGHTS['medium']
+            
+            
     
     except Exception as e:
         print(f"Warning: Duplicate suspicion rule failed - {e}")
@@ -261,6 +304,105 @@ def _calculate_severity(risk_score: float) -> str:
     return "High"
 
 
+def _determine_primary_category(row: pd.Series) -> str:
+    scores = {
+        "Financial Risk": row.get("financial_risk_score", 0),
+        "Behavioral Risk": row.get("behavioral_risk_score", 0),
+        "Statistical Risk": row.get("statistical_risk_score", 0),
+    }
+
+    primary = max(scores.items(), key=lambda x: x[1])
+    return primary[0] if primary[1] > 0 else "None"
+
+def generate_audit_explanation(row: pd.Series) -> str:
+    """
+    Generate human-readable explanation for audit findings.
+    
+    Combines multiple risk indicators into a coherent narrative explaining
+    why the transaction was flagged and what the risk profile indicates.
+    
+    Args:
+        row: DataFrame row with audit columns
+        
+    Returns:
+        Human-readable explanation string
+        
+    Example:
+        "High financial deviation combined with statistical anomaly indicates 
+        elevated fraud probability."
+    """
+    # Check if row has audit data
+    if 'audit_flags' not in row or not row['audit_flags']:
+        return "No audit concerns detected."
+    
+    flags = row['audit_flags']
+    if isinstance(flags, str):
+        flags = [f.strip() for f in flags.split(";") if f.strip()]
+    elif not isinstance(flags, list):
+        flags = []
+    reasoning = row.get('audit_reasoning_score', {})
+    severity = row.get('audit_severity', 'Low')
+    category = row.get('audit_category', 'None')
+    
+    # Build explanation based on flags and categories
+    explanations = []
+    
+    # Categorize flags
+    financial_flags = []
+    behavioral_flags = []
+    statistical_flags = []
+    
+    for flag in flags:
+        if any(cat_flag in flag for cat_flag in RISK_CATEGORIES['Financial Risk']):
+            financial_flags.append(flag)
+        elif any(cat_flag in flag for cat_flag in RISK_CATEGORIES['Behavioral Risk']):
+            behavioral_flags.append(flag)
+        elif any(cat_flag in flag for cat_flag in RISK_CATEGORIES['Statistical Risk']):
+            statistical_flags.append(flag)
+    
+    # Build narrative based on combinations
+    risk_components = []
+    
+    if financial_flags:
+        if len(financial_flags) > 1:
+            risk_components.append("multiple financial irregularities")
+        else:
+            risk_components.append("financial deviation")
+    
+    if behavioral_flags:
+        if len(behavioral_flags) > 1:
+            risk_components.append("suspicious behavioral patterns")
+        else:
+            risk_components.append("behavioral anomaly")
+    
+    if statistical_flags:
+        risk_components.append("statistical anomaly")
+    
+    # Construct explanation
+    if len(risk_components) == 0:
+        explanation = "Transaction flagged for review."
+    elif len(risk_components) == 1:
+        if severity == "High":
+            explanation = f"{severity} severity {risk_components[0]} detected, indicating elevated fraud risk."
+        else:
+            explanation = f"{risk_components[0].capitalize()} detected, requiring further review."
+    elif len(risk_components) == 2:
+        explanation = f"{risk_components[0].capitalize()} combined with {risk_components[1]} indicates elevated fraud probability."
+    else:
+        explanation = f"Multiple risk indicators detected: {', '.join(risk_components)}. Comprehensive investigation recommended."
+    
+    # Add category emphasis for high-risk cases
+    if severity == "High" and category != "None":
+        explanation += f" Primary concern: {category}."
+    
+    # Add specific flag details for context
+    if len(flags) <= 2:
+        flag_details = " Specifically: " + "; ".join(flags).lower() + "."
+        explanation += flag_details
+    
+    return explanation
+
+
 def summarize_audit_findings(df: pd.DataFrame) -> Dict[str, int]:
     """
     Generate summary statistics of audit findings.
@@ -277,6 +419,9 @@ def summarize_audit_findings(df: pd.DataFrame) -> Dict[str, int]:
         - high_risk_count: Number of high-severity transactions
         - medium_risk_count: Number of medium-severity transactions
         - low_risk_count: Number of low-severity transactions
+        - financial_risk_count: Transactions with financial risk
+        - behavioral_risk_count: Transactions with behavioral risk
+        - statistical_risk_count: Transactions with statistical risk
         
     Example:
         >>> summary = summarize_audit_findings(df_audited)
@@ -287,7 +432,10 @@ def summarize_audit_findings(df: pd.DataFrame) -> Dict[str, int]:
             'total_flagged': 0,
             'high_risk_count': 0,
             'medium_risk_count': 0,
-            'low_risk_count': 0
+            'low_risk_count': 0,
+            'financial_risk_count': 0,
+            'behavioral_risk_count': 0,
+            'statistical_risk_count': 0
         }
     
     # Count transactions with at least one flag
@@ -298,26 +446,41 @@ def summarize_audit_findings(df: pd.DataFrame) -> Dict[str, int]:
     medium_risk_count = (df['audit_severity'] == 'Medium').sum()
     low_risk_count = (df['audit_severity'] == 'Low').sum()
     
+    # Count by category
+    financial_risk_count = 0
+    behavioral_risk_count = 0
+    statistical_risk_count = 0
+    
+    if 'audit_category' in df.columns:
+        financial_risk_count = (df['audit_category'] == 'Financial Risk').sum()
+        behavioral_risk_count = (df['audit_category'] == 'Behavioral Risk').sum()
+        statistical_risk_count = (df['audit_category'] == 'Statistical Risk').sum()
+    
     return {
         'total_flagged': int(total_flagged),
         'high_risk_count': int(high_risk_count),
         'medium_risk_count': int(medium_risk_count),
-        'low_risk_count': int(low_risk_count)
+        'low_risk_count': int(low_risk_count),
+        'financial_risk_count': int(financial_risk_count),
+        'behavioral_risk_count': int(behavioral_risk_count),
+        'statistical_risk_count': int(statistical_risk_count)
     }
 
 
 def get_audit_rules_documentation() -> List[Dict[str, str]]:
     """
     Return documentation of all audit rules for UI display or reporting.
+    Enhanced with category information.
     
     Returns:
-        List of rule definitions with descriptions and risk levels
+        List of rule definitions with descriptions, risk levels, and categories
     """
     return [
         {
             'rule_name': 'High Amount Outlier',
             'description': 'Amount exceeds 2.5× department average',
             'risk_level': 'Major',
+            'category': 'Financial Risk',
             'points': RULE_WEIGHTS['major'],
             'flag_message': 'Amount significantly higher than department norm'
         },
@@ -325,6 +488,7 @@ def get_audit_rules_documentation() -> List[Dict[str, str]]:
             'rule_name': 'Frequent Vendor Risk',
             'description': 'Vendor transaction count in top 5%',
             'risk_level': 'Medium',
+            'category': 'Behavioral Risk',
             'points': RULE_WEIGHTS['medium'],
             'flag_message': 'Vendor unusually frequent'
         },
@@ -332,6 +496,7 @@ def get_audit_rules_documentation() -> List[Dict[str, str]]:
             'rule_name': 'Weekend Transaction',
             'description': 'Transaction executed on Saturday or Sunday',
             'risk_level': 'Minor',
+            'category': 'Behavioral Risk',
             'points': RULE_WEIGHTS['minor'],
             'flag_message': 'Transaction executed on weekend'
         },
@@ -339,6 +504,7 @@ def get_audit_rules_documentation() -> List[Dict[str, str]]:
             'rule_name': 'Z-Score Anomaly',
             'description': 'Statistical outlier (|z-score| > 2)',
             'risk_level': 'Major',
+            'category': 'Statistical Risk',
             'points': RULE_WEIGHTS['major'],
             'flag_message': 'Statistical anomaly detected'
         },
@@ -346,6 +512,7 @@ def get_audit_rules_documentation() -> List[Dict[str, str]]:
             'rule_name': 'Duplicate Suspicion',
             'description': 'Potential duplicate across amount, vendor, purpose, department',
             'risk_level': 'Medium',
+            'category': 'Financial Risk',
             'points': RULE_WEIGHTS['medium'],
             'flag_message': 'Potential duplicate pattern'
         }
@@ -369,6 +536,23 @@ def filter_by_audit_severity(df: pd.DataFrame, severity: str) -> pd.DataFrame:
     return df[df['audit_severity'] == severity].copy()
 
 
+def filter_by_audit_category(df: pd.DataFrame, category: str) -> pd.DataFrame:
+    """
+    Filter DataFrame to only include transactions of a specific risk category.
+    
+    Args:
+        df: DataFrame with audit columns
+        category: Risk category to filter ("Financial Risk", "Behavioral Risk", "Statistical Risk")
+        
+    Returns:
+        Filtered DataFrame
+    """
+    if 'audit_category' not in df.columns:
+        return df
+    
+    return df[df['audit_category'] == category].copy()
+
+
 def get_flagged_transactions(df: pd.DataFrame, min_flags: int = 1) -> pd.DataFrame:
     """
     Get transactions with at least a minimum number of audit flags.
@@ -383,8 +567,39 @@ def get_flagged_transactions(df: pd.DataFrame, min_flags: int = 1) -> pd.DataFra
     if 'audit_flags' not in df.columns:
         return pd.DataFrame()
     
-    flag_counts = df['audit_flags'].apply(len)
+    flag_counts = df['audit_flags'].apply(
+    lambda x: len(x.split(";")) if isinstance(x, str) and x else 0
+    )
     return df[flag_counts >= min_flags].copy()
+
+
+def get_category_breakdown(df: pd.DataFrame) -> Dict[str, Dict[str, int]]:
+    """
+    Get detailed breakdown of risk categories and their severity distribution.
+    
+    Args:
+        df: DataFrame with audit columns
+        
+    Returns:
+        Nested dictionary with category -> severity -> count
+    """
+    if 'audit_category' not in df.columns or 'audit_severity' not in df.columns:
+        return {}
+    
+    breakdown = {}
+    
+    for category in ['Financial Risk', 'Behavioral Risk', 'Statistical Risk']:
+        category_df = df[df['audit_category'] == category]
+        
+        if len(category_df) > 0:
+            breakdown[category] = {
+                'High': (category_df['audit_severity'] == 'High').sum(),
+                'Medium': (category_df['audit_severity'] == 'Medium').sum(),
+                'Low': (category_df['audit_severity'] == 'Low').sum(),
+                'Total': len(category_df)
+            }
+    
+    return breakdown
 
 
 # =====================================================
@@ -394,6 +609,7 @@ def get_flagged_transactions(df: pd.DataFrame, min_flags: int = 1) -> pd.DataFra
 def export_audit_report(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create a clean audit report DataFrame suitable for export.
+    Enhanced with category and explanation columns.
     
     Includes only essential audit columns with exploded flags for readability.
     
@@ -408,7 +624,8 @@ def export_audit_report(df: pd.DataFrame) -> pd.DataFrame:
     
     # Select relevant columns
     audit_cols = ['transaction_id', 'department', 'amount', 'vendor', 
-                  'audit_risk_score', 'audit_severity', 'audit_flags']
+                  'audit_risk_score', 'audit_severity', 'audit_category',
+                  'audit_explanation', 'audit_flags']
     
     available_cols = [col for col in audit_cols if col in df.columns]
     
@@ -456,18 +673,45 @@ def validate_dataframe_for_audit(df: pd.DataFrame) -> Tuple[bool, List[str]]:
 def get_audit_engine_info() -> Dict[str, any]:
     """
     Return metadata about the audit engine for system documentation.
+    Enhanced with category information.
     
     Returns:
-        Dictionary with engine version, rules count, and configuration
+        Dictionary with engine version, rules count, categories, and configuration
     """
     return {
-        'version': '1.0.0',
+        'version': '2.0.0',
         'total_rules': 5,
         'rule_weights': RULE_WEIGHTS,
         'severity_thresholds': SEVERITY_THRESHOLDS,
+        'risk_categories': list(RISK_CATEGORIES.keys()),
         'max_risk_score': 100,
+        'features': [
+            'Multi-category risk assessment',
+            'Reasoning score breakdown',
+            'Automated explanation generation',
+            'Category-based filtering'
+        ],
         'rules': get_audit_rules_documentation()
     }
+
+
+# =====================================================
+# BACKWARD COMPATIBILITY CHECK
+# =====================================================
+
+def is_backward_compatible(df: pd.DataFrame) -> bool:
+    """
+    Check if DataFrame has the minimum columns for basic audit functionality.
+    Enhanced audit features will be skipped if columns are missing.
+    
+    Args:
+        df: DataFrame to check
+        
+    Returns:
+        True if minimum columns exist
+    """
+    minimum_columns = ['amount', 'department']
+    return all(col in df.columns for col in minimum_columns)
 
 
 # =====================================================
@@ -476,8 +720,10 @@ def get_audit_engine_info() -> Dict[str, any]:
 
 if __name__ == "__main__":
     # Example usage
-    print("Audit Engine Module Loaded")
+    print("Enhanced Audit Engine Module Loaded")
+    print(f"Version: {get_audit_engine_info()['version']}")
     print(f"Available Rules: {len(get_audit_rules_documentation())}")
+    print(f"Risk Categories: {', '.join(get_audit_engine_info()['risk_categories'])}")
     print("\nRule Configuration:")
     for rule in get_audit_rules_documentation():
-        print(f"  - {rule['rule_name']}: {rule['points']} points ({rule['risk_level']})")
+        print(f"  - {rule['rule_name']}: {rule['points']} points ({rule['risk_level']}) - {rule['category']}")
