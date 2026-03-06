@@ -179,7 +179,7 @@ st.markdown("""
 # Check if user is logged in
 if not st.session_state.get('authenticated'):
     # Redirect to landing page (Home.py)
-    st.switch_page("Home.py")
+    st.switch_page("pages/Home.py")
 # ========== END AUTHENTICATION CHECK ==========
 
 # ==========================================
