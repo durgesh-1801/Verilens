@@ -1,99 +1,116 @@
 """
 Authentication Module
-Secure user authentication with PBKDF2 password hashing
-Multi-tenant organization support with RBAC
+Handles user registration, login, and password management
+Enhanced with email validation and password strength requirements
 """
 
-import sqlite3
 import hashlib
-import secrets
+import os
+import sqlite3
 from datetime import datetime
-from typing import Optional, Dict, Tuple
 from pathlib import Path
 
-# Database path (same as your existing database.py)
+# Database path
 DB_PATH = Path("fraud_detection.db")
 
 
-# ==========================================
-# PASSWORD HASHING (SECURE)
-# ==========================================
-def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+def get_connection():
+    """Get database connection"""
+    return sqlite3.connect(DB_PATH)
+
+
+def hash_password(password: str, salt: bytes = None) -> tuple:
     """
-    Hash password using SHA-256 with salt (production-ready alternative to bcrypt)
+    Hash password using PBKDF2-SHA256
     
     Args:
         password: Plain text password
         salt: Optional salt (generated if not provided)
-    
+        
     Returns:
-        Tuple of (hashed_password, salt)
+        Tuple of (password_hash, salt)
     """
     if salt is None:
-        salt = secrets.token_hex(32)  # 64-character hex salt
+        salt = os.urandom(32)
     
-    # Use PBKDF2 with SHA-256 (100,000 iterations for security)
-    hashed = hashlib.pbkdf2_hmac(
+    # Use PBKDF2-SHA256 with 100,000 iterations
+    password_hash = hashlib.pbkdf2_hmac(
         'sha256',
         password.encode('utf-8'),
-        salt.encode('utf-8'),
-        100000  # iterations
+        salt,
+        100000
     )
     
-    return hashed.hex(), salt
+    return password_hash.hex(), salt.hex()
 
 
-def verify_password(password: str, hashed_password: str, salt: str) -> bool:
-    """
-    Verify password against stored hash
+def init_users_table():
+    """Initialize users table with role and organization_id columns"""
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    Args:
-        password: Plain text password to verify
-        hashed_password: Stored password hash
-        salt: Stored salt
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            role TEXT DEFAULT 'viewer' NOT NULL,
+            organization_id INTEGER,
+            created_at TEXT NOT NULL,
+            last_login TEXT,
+            is_active INTEGER DEFAULT 1,
+            FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        )
+    """)
     
-    Returns:
-        True if password matches, False otherwise
-    """
-    new_hash, _ = hash_password(password, salt)
-    return new_hash == hashed_password
+    # Create indexes
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)
+    """)
+    
+    conn.commit()
+    conn.close()
 
 
-# ==========================================
-# USER MANAGEMENT
-# ==========================================
-def create_user(username: str, email: str, password: str, role: str = 'viewer', organization_id: int = None) -> Tuple[bool, str]:
+def create_user(username: str, email: str, password: str, role: str = 'viewer', organization_id: int = None) -> tuple:
     """
-    Create a new user account with role and organization
+    Create a new user with enhanced validation
     
     Args:
         username: Unique username
-        email: User email
+        email: User email (must be unique)
         password: Plain text password (will be hashed)
-        role: User role ('admin', 'auditor', 'viewer') - default 'viewer'
-        organization_id: Organization ID to join
-    
+        role: User role (viewer, auditor, admin) - default 'viewer'
+        organization_id: Optional organization ID
+        
     Returns:
         Tuple of (success: bool, message: str)
     """
     # Validation
     if not username or not email or not password:
-        return False, "All fields are required"
+        return False, "Username, email, and password are required"
     
-    if len(username) < 3:
-        return False, "Username must be at least 3 characters"
+    # Validate password length
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long"
     
-    if len(password) < 6:
-        return False, "Password must be at least 6 characters"
-    
+    # Validate email format (basic check)
     if '@' not in email:
         return False, "Invalid email format"
     
-    if role not in ['admin', 'auditor', 'viewer']:
-        role = 'viewer'  # Default to viewer if invalid role
+    # Validate role
+    valid_roles = ['viewer', 'auditor', 'admin']
+    if role not in valid_roles:
+        return False, f"Invalid role. Must be one of: {', '.join(valid_roles)}"
     
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Check if username already exists
@@ -106,12 +123,12 @@ def create_user(username: str, email: str, password: str, role: str = 'viewer', 
         cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
         if cursor.fetchone():
             conn.close()
-            return False, "Email already registered"
+            return False, "Email address already registered"
         
         # Hash password
         password_hash, salt = hash_password(password)
         
-        # Insert user with organization
+        # Insert user
         cursor.execute("""
             INSERT INTO users (username, email, password_hash, salt, role, organization_id, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -120,83 +137,91 @@ def create_user(username: str, email: str, password: str, role: str = 'viewer', 
         conn.commit()
         conn.close()
         
-        return True, "Account created successfully"
+        return True, "User created successfully"
     
     except Exception as e:
-        return False, f"Error creating account: {str(e)}"
+        return False, f"Error creating user: {str(e)}"
 
 
-def authenticate_user(username: str, password: str) -> Tuple[bool, Optional[Dict], str]:
+def authenticate_user(username: str, password: str) -> dict:
     """
-    Authenticate user with username and password (returns role and organization)
+    Authenticate user and return user data
     
     Args:
         username: Username
         password: Plain text password
-    
+        
     Returns:
-        Tuple of (success: bool, user_dict: dict or None, message: str)
+        User dict if authenticated, None otherwise
     """
-    if not username or not password:
-        return False, None, "Username and password required"
-    
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
-        # Get user with role and organization
         cursor.execute("""
-            SELECT id, username, email, password_hash, salt, role, organization_id, created_at, is_active
+            SELECT id, username, email, password_hash, salt, role, organization_id, is_active
             FROM users
             WHERE username = ?
         """, (username,))
         
         result = cursor.fetchone()
-        conn.close()
         
         if not result:
-            return False, None, "Invalid username or password"
+            conn.close()
+            return None
         
-        user_id, username, email, stored_hash, salt, role, organization_id, created_at, is_active = result
+        user_id, db_username, email, stored_hash, salt, role, organization_id, is_active = result
         
         # Check if user is active
         if not is_active:
-            return False, None, "Account is deactivated. Contact your administrator."
+            conn.close()
+            return None
         
         # Verify password
-        if verify_password(password, stored_hash, salt):
-            user_dict = {
-                'id': user_id,
-                'username': username,
-                'email': email,
-                'role': role,
-                'organization_id': organization_id,
-                'created_at': created_at
-            }
-            return True, user_dict, "Login successful"
-        else:
-            return False, None, "Invalid username or password"
+        password_hash, _ = hash_password(password, bytes.fromhex(salt))
+        
+        if password_hash != stored_hash:
+            conn.close()
+            return None
+        
+        # Update last login
+        cursor.execute("""
+            UPDATE users SET last_login = ? WHERE id = ?
+        """, (datetime.now().isoformat(), user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'id': user_id,
+            'username': db_username,
+            'email': email,
+            'role': role,
+            'organization_id': organization_id,
+            'is_active': is_active
+        }
     
     except Exception as e:
-        return False, None, f"Authentication error: {str(e)}"
+        print(f"Authentication error: {e}")
+        return None
 
 
-def get_user_by_id(user_id: int) -> Optional[Dict]:
+def get_user_by_id(user_id: int) -> dict:
     """
-    Get user information by ID (includes role and organization)
+    Get user by ID
     
     Args:
         user_id: User ID
-    
+        
     Returns:
-        User dictionary or None
+        User dict or None
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT id, username, email, role, organization_id, created_at
+            SELECT id, username, email, role, organization_id, created_at, last_login, is_active
             FROM users
             WHERE id = ?
         """, (user_id,))
@@ -211,8 +236,11 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
                 'email': result[2],
                 'role': result[3],
                 'organization_id': result[4],
-                'created_at': result[5]
+                'created_at': result[5],
+                'last_login': result[6],
+                'is_active': result[7]
             }
+        
         return None
     
     except Exception as e:
@@ -220,118 +248,19 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
         return None
 
 
-def update_password(user_id: int, old_password: str, new_password: str) -> Tuple[bool, str]:
+def get_all_users() -> list:
     """
-    Update user password
-    
-    Args:
-        user_id: User ID
-        old_password: Current password
-        new_password: New password
+    Get all users
     
     Returns:
-        Tuple of (success: bool, message: str)
-    """
-    if len(new_password) < 6:
-        return False, "New password must be at least 6 characters"
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get current password hash
-        cursor.execute("""
-            SELECT password_hash, salt
-            FROM users
-            WHERE id = ?
-        """, (user_id,))
-        
-        result = cursor.fetchone()
-        if not result:
-            conn.close()
-            return False, "User not found"
-        
-        stored_hash, salt = result
-        
-        # Verify old password
-        if not verify_password(old_password, stored_hash, salt):
-            conn.close()
-            return False, "Current password is incorrect"
-        
-        # Hash new password
-        new_hash, new_salt = hash_password(new_password)
-        
-        # Update password
-        cursor.execute("""
-            UPDATE users
-            SET password_hash = ?, salt = ?
-            WHERE id = ?
-        """, (new_hash, new_salt, user_id))
-        
-        conn.commit()
-        conn.close()
-        
-        return True, "Password updated successfully"
-    
-    except Exception as e:
-        return False, f"Error updating password: {str(e)}"
-
-
-def logout() -> None:
-    """
-    Logout current user (to be called from Streamlit)
-    This is a placeholder - actual logout happens in Streamlit session state
-    """
-    pass  # Logout logic handled in Streamlit app
-
-
-# ==========================================
-# INITIALIZATION
-# ==========================================
-def init_users_table():
-    """
-    Initialize users table in database
-    Called during database initialization
+        List of user dicts
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                role TEXT DEFAULT 'viewer' NOT NULL,
-                organization_id INTEGER,
-                created_at TEXT NOT NULL,
-                last_login TEXT,
-                is_active INTEGER DEFAULT 1,
-                FOREIGN KEY (organization_id) REFERENCES organizations(id)
-            )
-        """)
-        
-        conn.commit()
-        conn.close()
-        print("✓ Users table initialized")
-    
-    except Exception as e:
-        print(f"Error initializing users table: {e}")
-
-
-# ==========================================
-# UTILITY FUNCTIONS
-# ==========================================
-def get_all_users() -> list:
-    """Get all users (admin function)"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, username, email, role, organization_id, created_at, is_active
+            SELECT id, username, email, role, organization_id, created_at, last_login, is_active
             FROM users
             ORDER BY created_at DESC
         """)
@@ -345,7 +274,8 @@ def get_all_users() -> list:
                 'role': row[3],
                 'organization_id': row[4],
                 'created_at': row[5],
-                'is_active': row[6]
+                'last_login': row[6],
+                'is_active': row[7]
             })
         
         conn.close()
@@ -356,20 +286,58 @@ def get_all_users() -> list:
         return []
 
 
-def update_last_login(user_id: int):
-    """Update user's last login timestamp"""
+def change_password(user_id: int, old_password: str, new_password: str) -> tuple:
+    """
+    Change user password
+    
+    Args:
+        user_id: User ID
+        old_password: Current password
+        new_password: New password
+        
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    # Validate new password length
+    if len(new_password) < 8:
+        return False, "New password must be at least 8 characters long"
+    
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
+        # Get current password hash and salt
         cursor.execute("""
-            UPDATE users
-            SET last_login = ?
-            WHERE id = ?
-        """, (datetime.now().isoformat(), user_id))
+            SELECT password_hash, salt FROM users WHERE id = ?
+        """, (user_id,))
+        
+        result = cursor.fetchone()
+        
+        if not result:
+            conn.close()
+            return False, "User not found"
+        
+        stored_hash, salt = result
+        
+        # Verify old password
+        old_hash, _ = hash_password(old_password, bytes.fromhex(salt))
+        
+        if old_hash != stored_hash:
+            conn.close()
+            return False, "Current password is incorrect"
+        
+        # Hash new password
+        new_hash, new_salt = hash_password(new_password)
+        
+        # Update password
+        cursor.execute("""
+            UPDATE users SET password_hash = ?, salt = ? WHERE id = ?
+        """, (new_hash, new_salt, user_id))
         
         conn.commit()
         conn.close()
+        
+        return True, "Password changed successfully"
     
     except Exception as e:
-        print(f"Error updating last login: {e}")
+        return False, f"Error changing password: {str(e)}"
