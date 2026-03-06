@@ -12,6 +12,8 @@ Day 9 Updates: Role-Based Access Control (RBAC)
 Day 10 Updates: Multi-Tenant Organization System
 Day 11 Updates: Audit Rule Engine Integration
 Day 12 Updates: Audit Case Management System
+Landing Page: Home.py integration
+Sidebar Navigation: Clean professional sidebar
 """
 
 import streamlit as st
@@ -158,48 +160,26 @@ except ImportError:
 # PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="AI Fraud Detection System",
+    page_title="Verilens - AI Fraud Detection",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ========== AUTHENTICATION CHECK ==========
+# Hide Streamlit's default page navigation
+st.markdown("""
+<style>
+    [data-testid="stSidebarNav"] {
+        display: none;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ========== AUTHENTICATION CHECK - REDIRECT TO LANDING PAGE ==========
 # Check if user is logged in
 if not st.session_state.get('authenticated'):
-    st.markdown('<div class="main-title">AI Fraud & Anomaly Detection</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="subtitle">
-    Designed for auditors to identify high-risk public transactions using explainable AI and real-time monitoring.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.warning("🔒 Please login to access the application")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        st.info("You need to be logged in to use the AI Fraud Detection System")
-        
-        col_login, col_signup = st.columns(2)
-        
-        with col_login:
-            if st.button("🔐 Login", use_container_width=True, type="primary"):
-                st.switch_page("pages/_Login.py")
-        
-        with col_signup:
-            if st.button("📝 Sign Up", use_container_width=True):
-                st.switch_page("pages/_Signup.py")
-    
-    st.markdown("---")
-    st.markdown("""
-    <div class="footer">
-    🛡️ AI Fraud Detection System · Secure Authentication Required<br>
-    Built with Streamlit · Enterprise-Grade Security
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.stop()
+    # Redirect to landing page (Home.py)
+    st.switch_page("Home.py")
 # ========== END AUTHENTICATION CHECK ==========
 
 # ==========================================
@@ -284,9 +264,15 @@ body {
 </style>
 """, unsafe_allow_html=True)
 
-# ========== SIDEBAR USER INFO WITH RBAC AND ORGANIZATION ==========
+# ========== CUSTOM SIDEBAR NAVIGATION ==========
 with st.sidebar:
+    # Sidebar title
+    st.markdown("## 🛡️ Verilens")
+    st.caption("AI Audit Intelligence Platform")
+    
     st.markdown("---")
+    
+    # User info section
     st.markdown('<div class="user-info-box">', unsafe_allow_html=True)
     st.markdown("### 👤 Logged in as:")
     st.success(f"**{st.session_state['user']['username']}**")
@@ -314,6 +300,39 @@ with st.sidebar:
     
     st.markdown('</div>', unsafe_allow_html=True)
     
+    st.markdown("---")
+    
+    # Navigation section
+    st.markdown("### 📍 Navigation")
+    
+    # Main pages
+    if st.button("🏠 Home", use_container_width=True):
+        st.switch_page("pages/Home.py")
+    
+    if st.button("📂 Data Upload", use_container_width=True, type="primary"):
+        st.switch_page("app.py")
+    
+    st.markdown("---")
+    st.markdown("**Analysis & Detection**")
+    
+    if st.button("🤖 Anomaly Detection", use_container_width=True):
+        st.switch_page("pages/_Anomaly_Detection.py")
+    
+    if st.button("📊 Dashboard", use_container_width=True):
+        st.switch_page("pages/Dashboard.py")
+    
+    if st.button("🚨 Alerts", use_container_width=True):
+        st.switch_page("pages/_Alerts.py")
+    
+    st.markdown("---")
+    st.markdown("**Reports & Analytics**")
+    
+    if st.button("📑 Reports", use_container_width=True):
+        st.switch_page("pages/_Reports.py")
+    
+    st.markdown("---")
+    
+    # Logout button
     if st.button("🚪 Logout", use_container_width=True, type="secondary"):
         # Clear session state
         st.session_state['user'] = None
@@ -328,7 +347,11 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-# ========== END SIDEBAR USER INFO ==========
+    
+    # Footer
+    st.caption("Verilens AI Audit Platform")
+    st.caption("© 2024 Verilens Team")
+# ========== END SIDEBAR NAVIGATION ==========
 
 # ==========================================
 # SESSION STATE
@@ -515,7 +538,7 @@ if option == "Upload CSV/Excel File":
                             is_valid, issues = validate_pipeline_output(df_processed)
                             
                             if is_valid:
-                                # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES ==========
+                                # Apply audit engine
                                 if AUDIT_ENGINE_AVAILABLE:
                                     with st.spinner("🔍 Running audit rule engine..."):
                                         df_processed = generate_audit_flags(df_processed)
@@ -524,7 +547,7 @@ if option == "Upload CSV/Excel File":
                                         audit_summary = summarize_audit_findings(df_processed)
                                         st.success(f"✓ Audit engine processed: {audit_summary['total_flagged']} transactions flagged")
                                         
-                                        # ========== NEW: CREATE AUDIT CASES ==========
+                                        # Create audit cases
                                         if AUDIT_CASE_MANAGER_AVAILABLE:
                                             df_processed = create_audit_cases(df_processed)
                                             
@@ -538,8 +561,6 @@ if option == "Upload CSV/Excel File":
                                                     database.insert_audit_cases(df_processed)
                                                 except Exception as e:
                                                     st.warning(f"Cases created but not saved to database: {e}")
-                                        # ========== END CREATE AUDIT CASES ==========
-                                # ========== END MODIFIED AUDIT ENGINE ==========
                                 
                                 normalized_health = normalize_health_output(df_processed, health)
 
@@ -629,7 +650,7 @@ else:
             df_enriched = enrich_features(raw_df)
             health = compute_health_score(df_enriched)
             
-            # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES TO TEST DATA ==========
+            # Apply audit engine
             if AUDIT_ENGINE_AVAILABLE:
                 df_enriched = generate_audit_flags(df_enriched)
                 st.session_state.audit_processed = True
@@ -648,7 +669,6 @@ else:
                             database.insert_audit_cases(df_enriched)
                         except:
                             pass
-            # ========== END MODIFIED AUDIT ENGINE ==========
             
             st.session_state.data = df_enriched
             normalized_health = normalize_health_output(df_enriched, health)
@@ -672,404 +692,11 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# COLUMN MAPPING & VALIDATION (MANUAL MODE)
-# ==========================================
-if (st.session_state.raw_uploaded_data is not None and 
-    SCHEMA_MAPPER_AVAILABLE and 
-    option == "Upload CSV/Excel File" and 
-    st.session_state.pipeline_mode == 'manual'):
-    
-    raw_df = st.session_state.raw_uploaded_data
-    
-    # Dataset Integrity Check
-    is_valid, warnings = validate_dataset_integrity(raw_df)
-    
-    if warnings:
-        st.markdown('<div class="section-box">', unsafe_allow_html=True)
-        st.subheader("⚠️ Data Quality Warnings")
-        for warning in warnings:
-            st.warning(warning)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    if not is_valid:
-        st.error("❌ Dataset failed integrity check. Please upload a valid dataset.")
-        st.stop()
-    
-    # Column Mapping Interface
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
-    st.header("🔗 Manual Column Mapping")
-    
-    # Auto-detect columns
-    if not st.session_state.column_mapping:
-        detected_mapping = detect_columns(raw_df)
-        st.session_state.column_mapping = detected_mapping
-    
-    st.markdown("**Map your dataset columns to the standard schema:**")
-    
-    # Create mapping UI
-    mapping_changed = False
-    new_mapping = {}
-    
-    col1, col2 = st.columns(2)
-    
-    available_cols = get_available_columns(raw_df)
-    
-    for i, (standard_field, config) in enumerate(STANDARD_SCHEMA.items()):
-        with col1 if i % 2 == 0 else col2:
-            current_value = st.session_state.column_mapping.get(standard_field)
-            
-            # Determine default index
-            if current_value and current_value in available_cols:
-                default_idx = available_cols.index(current_value)
-            else:
-                default_idx = 0
-            
-            # Label with required indicator
-            label = f"**{standard_field}**" + (" (Required)" if config['required'] else " (Optional)")
-            
-            selected = st.selectbox(
-                label,
-                available_cols,
-                index=default_idx,
-                key=f"map_{standard_field}",
-                help=f"Aliases: {', '.join(config['aliases'][:3])}"
-            )
-            
-            new_mapping[standard_field] = None if selected == 'None' else selected
-            
-            if new_mapping[standard_field] != st.session_state.column_mapping.get(standard_field):
-                mapping_changed = True
-    
-    # Update mapping if changed
-    if mapping_changed:
-        st.session_state.column_mapping = new_mapping
-        st.session_state.schema_validated = False
-    
-    # Validate and Apply Mapping
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        if st.button("✅ Validate & Apply Mapping", type="primary", use_container_width=True):
-            # Map to standard schema
-            try:
-                standardized_df = map_to_standard_schema(raw_df, st.session_state.column_mapping)
-                
-                # Validate required fields
-                is_valid, missing_fields = validate_required_fields(standardized_df)
-                
-                if is_valid:
-                    # Apply data pipeline cleaning and enrichment if available
-                    if DATA_PIPELINE_AVAILABLE:
-                        try:
-                            df_clean = clean_dataset(raw_df, st.session_state.column_mapping)
-                            df_enriched = enrich_features(df_clean)
-                            health = compute_health_score(df_enriched)
-                            
-                            # ========== MODIFIED: APPLY AUDIT ENGINE + CREATE CASES ==========
-                            if AUDIT_ENGINE_AVAILABLE:
-                                df_enriched = generate_audit_flags(df_enriched)
-                                st.session_state.audit_processed = True
-                                
-                                if AUDIT_CASE_MANAGER_AVAILABLE:
-                                    df_enriched = create_audit_cases(df_enriched)
-                                    
-                                    # Save cases to database
-                                    try:
-                                        database.insert_audit_cases(df_enriched)
-                                    except:
-                                        pass
-                            # ========== END MODIFIED AUDIT ENGINE ==========
-                            
-                            st.session_state.data = df_enriched
-                            normalized_health = normalize_health_output(df_enriched, health)
-                            st.session_state.data_health = normalized_health
-                            
-                            # Save to database
-                            try:
-                                user_id = st.session_state['user']['id']
-                                organization_id = st.session_state['user'].get('organization_id')
-                                database.insert_dataframe(df_enriched, user_id=user_id, organization_id=organization_id)
-                                st.success("✓ Schema validated, cleaned, enriched, and saved to your organization!")
-                            except Exception as e:
-                                st.success("✓ Schema validated, cleaned, and enriched successfully!")
-                                st.warning(f"Not saved to database: {e}")
-                        except:
-                            st.session_state.data = standardized_df
-                            st.session_state.data_health = get_data_health_summary(standardized_df)
-                            st.success("✓ Schema validated and applied successfully!")
-                    else:
-                        st.session_state.data = standardized_df
-                        st.session_state.data_health = get_data_health_summary(standardized_df)
-                        st.success("✓ Schema validated and applied successfully!")
-                    
-                    st.session_state.schema_validated = True
-                    st.rerun()
-                else:
-                    st.error("❌ Validation failed. Missing required fields:")
-                    for field in missing_fields:
-                        st.error(f"  • {field}")
-            
-            except Exception as e:
-                st.error(f"❌ Error during mapping: {e}")
-    
-    with col2:
-        if st.button("🔄 Auto-Detect Again", use_container_width=True):
-            st.session_state.column_mapping = detect_columns(raw_df)
-            st.rerun()
-    
-    with col3:
-        if st.button("🗑️ Clear Mapping", use_container_width=True):
-            st.session_state.column_mapping = {}
-            st.session_state.schema_validated = False
-            st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ==========================================
-# DATA HEALTH SUMMARY (ENHANCED)
-# ==========================================
-if st.session_state.schema_validated and st.session_state.data_health is not None:
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
-    st.header("🏥 Data Health Summary")
-    
-    health = st.session_state.data_health
-    
-    # Overall Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Rows", f"{health['total_rows']:,}")
-    with col2:
-        st.metric("Total Columns", health['total_columns'])
-    with col3:
-        dup_pct = (health['duplicate_rows'] / health['total_rows'] * 100) if health['total_rows'] > 0 else 0
-        st.metric("Duplicate Rows", health['duplicate_rows'], delta=f"{dup_pct:.1f}%", delta_color="inverse")
-    with col4:
-        total_missing = sum(v['count'] for v in health['missing_values'].values())
-        total_cells = health['total_rows'] * health['total_columns']
-        missing_pct = (total_missing / total_cells * 100) if total_cells > 0 else 0
-        st.metric("Missing Values", total_missing, delta=f"{missing_pct:.1f}%", delta_color="inverse")
-    
-    # Show advanced health metrics if available
-    if 'overall_score' in health:
-        st.markdown("#### 📊 Advanced Health Metrics")
-        
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-        
-        with metric_col1:
-            comp_color = "🟢" if health['completeness'] >= 90 else "🟡" if health['completeness'] >= 70 else "🔴"
-            st.metric("Completeness", f"{comp_color} {health['completeness']}%")
-        
-        with metric_col2:
-            val_color = "🟢" if health['validity'] >= 90 else "🟡" if health['validity'] >= 70 else "🔴"
-            st.metric("Validity", f"{val_color} {health['validity']}%")
-        
-        with metric_col3:
-            cons_color = "🟢" if health.get('consistency', 100) >= 90 else "🟡" if health.get('consistency', 100) >= 70 else "🔴"
-            st.metric("Consistency", f"{cons_color} {health.get('consistency', 100)}%")
-        
-        with metric_col4:
-            score_color = "🟢" if health['overall_score'] >= 80 else "🟡" if health['overall_score'] >= 60 else "🔴"
-            st.metric("Overall Score", f"{score_color} {health['overall_score']}")
-    
-    # Audit Engine Summary
-    if st.session_state.audit_processed and AUDIT_ENGINE_AVAILABLE and st.session_state.data is not None:
-        st.markdown("#### 🔍 Audit Rule Engine Summary")
-        
-        audit_summary = summarize_audit_findings(st.session_state.data)
-        
-        audit_col1, audit_col2, audit_col3, audit_col4 = st.columns(4)
-        
-        with audit_col1:
-            st.metric("Total Flagged", audit_summary['total_flagged'])
-        with audit_col2:
-            st.metric("🔴 High Risk", audit_summary['high_risk_count'])
-        with audit_col3:
-            st.metric("🟡 Medium Risk", audit_summary['medium_risk_count'])
-        with audit_col4:
-            st.metric("🟢 Low Risk", audit_summary['low_risk_count'])
-    
-    # ========== NEW: AUDIT CASE SUMMARY ==========
-    if AUDIT_CASE_MANAGER_AVAILABLE and st.session_state.data is not None:
-        if 'audit_case_id' in st.session_state.data.columns:
-            st.markdown("#### 📋 Audit Case Summary")
-            
-            case_summary = get_case_summary(st.session_state.data)
-            
-            case_col1, case_col2, case_col3, case_col4, case_col5 = st.columns(5)
-            
-            with case_col1:
-                st.metric("Total Cases", f"{case_summary['total_cases']:,}")
-            with case_col2:
-                st.metric("🟡 Open", f"{case_summary['open_cases']:,}")
-            with case_col3:
-                st.metric("🔵 Under Review", f"{case_summary['under_review']:,}")
-            with case_col4:
-                st.metric("🔴 Escalated", f"{case_summary['escalated']:,}")
-            with case_col5:
-                st.metric("🟢 Closed", f"{case_summary['closed_cases']:,}")
-    # ========== END AUDIT CASE SUMMARY ==========
-    
-    # Missing Values Breakdown
-    st.markdown("#### Missing Values by Column")
-    
-    missing_data = []
-    for col, stats in health['missing_values'].items():
-        if stats['count'] > 0:
-            missing_data.append({
-                'Column': col,
-                'Missing Count': stats['count'],
-                'Missing %': stats['percentage']
-            })
-    
-    if missing_data:
-        missing_df = pd.DataFrame(missing_data)
-        st.dataframe(missing_df, use_container_width=True, hide_index=True)
-    else:
-        st.success("✓ No missing values detected!")
-    
-    # Issues
-    if health.get('issues'):
-        st.markdown("#### ⚠️ Data Quality Issues")
-        for issue in health['issues']:
-            st.warning(issue)
-    
-    # Data Types
-    with st.expander("📋 Column Data Types"):
-        types_df = pd.DataFrame([
-            {'Column': col, 'Data Type': dtype}
-            for col, dtype in health['data_types'].items()
-        ])
-        st.dataframe(types_df, use_container_width=True, hide_index=True)
-    
-    # Value Ranges
-    if health.get('value_ranges'):
-        with st.expander("📊 Numeric Column Ranges"):
-            ranges_df = pd.DataFrame([
-                {
-                    'Column': col,
-                    'Min': f"{stats['min']:,.2f}" if stats['min'] is not None else 'N/A',
-                    'Max': f"{stats['max']:,.2f}" if stats['max'] is not None else 'N/A',
-                    'Mean': f"{stats['mean']:,.2f}" if stats['mean'] is not None else 'N/A'
-                }
-                for col, stats in health['value_ranges'].items()
-            ])
-            st.dataframe(ranges_df, use_container_width=True, hide_index=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ==========================================
-# DATA PREVIEW (UPDATED)
-# ==========================================
-if st.session_state.data is not None and st.session_state.schema_validated:
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
-    st.header("📋 Processed Data Preview")
-    
-    # Apply department filter to preview
-    preview_data = st.session_state.data
-    if st.session_state.selected_department != "All Departments":
-        if 'department' in preview_data.columns:
-            preview_data = preview_data[preview_data['department'] == st.session_state.selected_department]
-            st.info(f"🏛️ Showing {len(preview_data)} transactions from {st.session_state.selected_department} department")
-        else:
-            st.warning("⚠️ Department column not found in data")
-    
-    st.dataframe(preview_data.head(50), use_container_width=True)
-    
-    # Data Statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Records", len(preview_data))
-    with col2:
-        if 'amount' in preview_data.columns:
-            st.metric("Avg Amount", f"${preview_data['amount'].mean():,.2f}")
-    with col3:
-        if 'department' in preview_data.columns:
-            st.metric("Departments", preview_data['department'].nunique())
-    with col4:
-        if 'vendor' in preview_data.columns:
-            st.metric("Unique Vendors", preview_data['vendor'].nunique())
-    
-    # Show enriched features if available
-    enriched_cols = ['monthly_spend_per_department', 'vendor_transaction_count', 'zscore_amount', 
-                     'amount_percentile', 'day_of_week', 'is_weekend']
-    
-    available_enriched = [col for col in enriched_cols if col in preview_data.columns]
-    
-    if available_enriched:
-        with st.expander("✨ View Enriched Features"):
-            st.info(f"**Available Features:** {', '.join(available_enriched)}")
-            st.dataframe(preview_data[available_enriched].head(10), use_container_width=True)
-    
-    # Show audit flags if available
-    if st.session_state.audit_processed and 'audit_flags' in preview_data.columns:
-        with st.expander("🔍 View Audit Flags"):
-            audit_cols = ['transaction_id', 'audit_risk_score', 'audit_severity', 'audit_flags']
-            available_audit_cols = [col for col in audit_cols if col in preview_data.columns]
-            
-            flagged_data = preview_data[preview_data['audit_flags'].apply(lambda x: len(x) > 0)]
-            
-            if len(flagged_data) > 0:
-                st.info(f"**{len(flagged_data)} transactions flagged by audit rules**")
-                st.dataframe(flagged_data[available_audit_cols].head(10), use_container_width=True)
-            else:
-                st.success("✓ No audit flags detected")
-    
-    # ========== NEW: SHOW AUDIT CASES IF AVAILABLE ==========
-    if 'audit_case_id' in preview_data.columns:
-        with st.expander("📋 View Audit Cases"):
-            case_cols = ['transaction_id', 'audit_case_id', 'audit_status', 'audit_severity', 'audit_risk_score']
-            available_case_cols = [col for col in case_cols if col in preview_data.columns]
-            
-            cases_data = preview_data[preview_data['audit_case_id'].notna()]
-            
-            if len(cases_data) > 0:
-                st.info(f"**{len(cases_data)} audit cases created**")
-                st.dataframe(cases_data[available_case_cols].head(10), use_container_width=True)
-            else:
-                st.info("No audit cases created (only High/Medium severity transactions become cases)")
-    # ========== END AUDIT CASES DISPLAY ==========
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-elif st.session_state.raw_uploaded_data is not None and not st.session_state.schema_validated:
-    st.info("👆 Please complete data processing above to continue")
-
-# ==========================================
-# QUICK ACTIONS (UPDATED)
-# ==========================================
-if st.session_state.data is not None and st.session_state.schema_validated:
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
-    st.header("⚡ Quick Actions")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if st.button("🔍 Run AI Risk Scan", use_container_width=True, type="primary"):
-            st.info("Navigate to 'Anomaly Detection' page to run AI risk scan")
-    
-    with col2:
-        if st.button("📊 View Dashboard", use_container_width=True):
-            st.info("Navigate to 'Dashboard' page to view analytics")
-    
-    with col3:
-        if st.button("⚠️ View Alerts", use_container_width=True):
-            st.info("Navigate to 'Alerts' page to manage flagged transactions")
-    
-    with col4:
-        if st.button("📄 Export Reports", use_container_width=True):
-            st.info("Navigate to 'Reports' page to generate audit reports")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ==========================================
 # FOOTER
 # ==========================================
 st.markdown("""
 <div class="footer">
-🛡️ AI Fraud Detection System · Hack4Delhi · Verilens Team<br>
+🛡️ Verilens AI Audit Platform · Hack4Delhi · Verilens Team<br>
 Built with Streamlit · Explainable AI · Department-Based Risk Analysis · Persistent Audit Trail · Smart Data Validation · Automated Pipeline · Secure Authentication · Role-Based Access Control · Multi-Tenant Organizations · Intelligent Audit Rules · Audit Case Management
 </div>
 """, unsafe_allow_html=True)
