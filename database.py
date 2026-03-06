@@ -1,11 +1,12 @@
 """
 Database Layer for AI Fraud Detection System
 SQLite-based persistence for transactions and audit actions
+Enhanced with Audit Case Lifecycle Management and Safe Migration
 """
 
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Database file location
@@ -21,6 +22,209 @@ def get_connection():
 
 
 # =====================================================
+# AUDIT CASES TABLE (ENHANCED WITH SAFE MIGRATION)
+# =====================================================
+
+def init_audit_cases_table():
+    """Initialize audit cases table with all columns"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Check if table exists
+    cursor.execute("""
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='audit_cases'
+    """)
+    table_exists = cursor.fetchone() is not None
+    
+    if not table_exists:
+        # Create new table with all columns
+        cursor.execute("""
+            CREATE TABLE audit_cases (
+                case_id TEXT PRIMARY KEY,
+                transaction_id INTEGER,
+                status TEXT,
+                case_priority TEXT,
+                assigned_to TEXT,
+                auditor_comment TEXT,
+                resolution TEXT,
+                created_at TEXT,
+                due_date TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_status 
+            ON audit_cases(status)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_transaction 
+            ON audit_cases(transaction_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_priority 
+            ON audit_cases(case_priority)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_due_date 
+            ON audit_cases(due_date)
+        """)
+        
+        print("✓ Created audit_cases table with priority and SLA columns")
+    else:
+        # Table exists - migration will be handled separately
+        print("✓ Audit_cases table exists - checking for migrations")
+    
+    conn.commit()
+    conn.close()
+
+
+def migrate_audit_cases_table():
+    """
+    Safely migrate audit_cases table to add new columns.
+    Preserves all existing data.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Check if table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='audit_cases'
+        """)
+        table_exists = cursor.fetchone() is not None
+        
+        if not table_exists:
+            print("✓ No migration needed - table will be created fresh")
+            conn.close()
+            return
+        
+        # Get current table structure
+        cursor.execute("PRAGMA table_info(audit_cases)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        migrations_needed = []
+        
+        # Check for missing columns
+        if 'case_priority' not in columns:
+            migrations_needed.append('case_priority')
+        
+        if 'due_date' not in columns:
+            migrations_needed.append('due_date')
+        
+        if not migrations_needed:
+            print("✓ No migrations needed for audit_cases table")
+            conn.close()
+            return
+        
+        print(f"⚠️ Migration needed: Adding columns {migrations_needed}")
+        
+        # SQLite doesn't support adding multiple columns at once
+        # and doesn't support adding columns with constraints
+        # So we need to recreate the table
+        
+        # Step 1: Rename old table
+        cursor.execute("ALTER TABLE audit_cases RENAME TO audit_cases_old")
+        print("  → Renamed old table to audit_cases_old")
+        
+        # Step 2: Create new table with all columns
+        cursor.execute("""
+            CREATE TABLE audit_cases (
+                case_id TEXT PRIMARY KEY,
+                transaction_id INTEGER,
+                status TEXT,
+                case_priority TEXT,
+                assigned_to TEXT,
+                auditor_comment TEXT,
+                resolution TEXT,
+                created_at TEXT,
+                due_date TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        print("  → Created new audit_cases table with new columns")
+        
+        # Step 3: Copy data from old table
+        # Get columns from old table
+        cursor.execute("PRAGMA table_info(audit_cases_old)")
+        old_columns = [row[1] for row in cursor.fetchall()]
+        old_columns_str = ', '.join(old_columns)
+        
+        # Build INSERT statement with matching columns
+        cursor.execute(f"""
+            INSERT INTO audit_cases ({old_columns_str})
+            SELECT {old_columns_str} FROM audit_cases_old
+        """)
+        
+        rows_migrated = cursor.rowcount
+        print(f"  → Copied {rows_migrated} rows from old table")
+        
+        # Step 4: Update NULL values for new columns with defaults
+        if 'case_priority' in migrations_needed:
+            cursor.execute("UPDATE audit_cases SET case_priority = 'Medium' WHERE case_priority IS NULL")
+            print("  → Added case_priority column with default 'Medium'")
+        
+        if 'due_date' in migrations_needed:
+            # Calculate due dates for existing cases based on default 5 days
+            cursor.execute("""
+                UPDATE audit_cases 
+                SET due_date = datetime(created_at, '+5 days')
+                WHERE due_date IS NULL AND created_at IS NOT NULL
+            """)
+            print("  → Added due_date column with default +5 days from created_at")
+        
+        # Step 5: Drop old table
+        cursor.execute("DROP TABLE audit_cases_old")
+        print("  → Dropped old table")
+        
+        # Step 6: Recreate indexes
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_status 
+            ON audit_cases(status)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_transaction 
+            ON audit_cases(transaction_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_priority 
+            ON audit_cases(case_priority)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_cases_due_date 
+            ON audit_cases(due_date)
+        """)
+        
+        print("  → Recreated indexes")
+        
+        conn.commit()
+        print("✓ Migration completed successfully")
+        
+    except Exception as e:
+        print(f"⚠️ Migration error: {e}")
+        # Rollback if error occurs
+        try:
+            cursor.execute("DROP TABLE IF EXISTS audit_cases")
+            cursor.execute("ALTER TABLE audit_cases_old RENAME TO audit_cases")
+            conn.commit()
+            print("✓ Rolled back migration - old table restored")
+        except Exception as rollback_error:
+            print(f"❌ Rollback failed: {rollback_error}")
+            print("   Manual intervention may be needed")
+    
+    finally:
+        conn.close()
+
+
+# =====================================================
 # INITIALIZATION
 # =====================================================
 
@@ -28,7 +232,7 @@ def init_database():
     conn = get_connection()
     cursor = conn.cursor()
     
-    # ========== NEW: ORGANIZATIONS TABLE ==========
+    # Organizations table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS organizations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,9 +246,8 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_organizations_name 
         ON organizations(name)
     """)
-    # ========== END ORGANIZATIONS TABLE ==========
     
-    # ========== MODIFIED: TRANSACTIONS TABLE WITH USER_ID AND ORGANIZATION_ID ==========
+    # Transactions table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY,
@@ -64,9 +267,8 @@ def init_database():
             FOREIGN KEY (organization_id) REFERENCES organizations(id)
         )
     """)
-    # ========== END MODIFIED TRANSACTIONS TABLE ==========
     
-    # Existing audit_actions table
+    # Audit actions table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS audit_actions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,7 +282,7 @@ def init_database():
         )
     """)
     
-    # Existing audit_history table
+    # Audit history table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS audit_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +295,7 @@ def init_database():
         )
     """)
     
-    # ========== MODIFIED: USERS TABLE WITH ROLE AND ORGANIZATION_ID ==========
+    # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,9 +311,8 @@ def init_database():
             FOREIGN KEY (organization_id) REFERENCES organizations(id)
         )
     """)
-    # ========== END MODIFIED USERS TABLE ==========
     
-    # Create indexes for faster user lookups
+    # Create indexes
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_users_username 
         ON users(username)
@@ -122,7 +323,6 @@ def init_database():
         ON users(email)
     """)
     
-    # ========== NEW: INDEXES FOR USER_ID AND ORGANIZATION_ID ==========
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_transactions_user_id 
         ON transactions(user_id)
@@ -137,15 +337,21 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_users_organization_id 
         ON users(organization_id)
     """)
-    # ========== END NEW INDEXES ==========
     
     conn.commit()
     conn.close()
+    
+    # Initialize audit cases table (separate connection)
+    init_audit_cases_table()
+    
+    # Run migration (separate connection)
+    migrate_audit_cases_table()
+    
     print("✓ Database initialized successfully")
 
 
 # =====================================================
-# ORGANIZATION MANAGEMENT (NEW)
+# ORGANIZATION MANAGEMENT
 # =====================================================
 
 def create_organization(name):
@@ -343,17 +549,17 @@ def activate_user(user_id):
 
 
 # =====================================================
-# DATAFRAME INSERT - MODIFIED WITH USER_ID AND ORGANIZATION_ID
+# DATAFRAME INSERT
 # =====================================================
 
 def insert_dataframe(df: pd.DataFrame, user_id=None, organization_id=None):
     """
-    Insert dataframe with optional user_id and organization_id
+    Insert dataframe with user_id and organization_id
     
     Args:
         df: DataFrame to insert
-        user_id: Optional user ID to associate with all transactions
-        organization_id: Optional organization ID to associate with all transactions
+        user_id: Optional user ID
+        organization_id: Optional organization ID
     """
     df = df.copy()
 
@@ -383,17 +589,17 @@ def insert_dataframe(df: pd.DataFrame, user_id=None, organization_id=None):
 
 
 # =====================================================
-# TRANSACTION SAVE / UPDATE - MODIFIED WITH USER_ID AND ORGANIZATION_ID
+# TRANSACTION SAVE / UPDATE
 # =====================================================
 
 def save_transaction(transaction_data, user_id=None, organization_id=None):
     """
-    Save or update transaction with optional user_id and organization_id
+    Save or update transaction with user_id and organization_id
     
     Args:
         transaction_data: Dictionary with transaction details
-        user_id: Optional user ID to associate with transaction
-        organization_id: Optional organization ID to associate with transaction
+        user_id: Optional user ID
+        organization_id: Optional organization ID
     """
     for key, value in transaction_data.items():
         if isinstance(value, pd.Timestamp):
@@ -440,7 +646,6 @@ def save_transaction(transaction_data, user_id=None, organization_id=None):
                 transaction_data['transaction_id']
             ))
         else:
-            # Preserve existing values if not provided
             cursor.execute("""
                 UPDATE transactions SET
                     department = ?,
@@ -535,7 +740,7 @@ def get_audit_status(transaction_id):
 
 
 # =====================================================
-# FETCH FUNCTIONS - MODIFIED WITH RBAC AND ORGANIZATION
+# FETCH FUNCTIONS
 # =====================================================
 
 def get_transaction_with_audit(transaction_id):
@@ -567,15 +772,6 @@ def get_transaction_with_audit(transaction_id):
 def get_all_transactions(filters=None, user_id=None, user_role=None, organization_id=None):
     """
     Get transactions with RBAC and organization filtering
-    
-    Args:
-        filters: Optional filters (department, severity)
-        user_id: Current user's ID for RBAC
-        user_role: Current user's role ('admin', 'auditor', 'viewer')
-        organization_id: Organization ID for multi-tenant filtering
-    
-    Returns:
-        DataFrame of transactions (filtered by role and organization)
     """
     conn = get_connection()
     
@@ -583,12 +779,12 @@ def get_all_transactions(filters=None, user_id=None, user_role=None, organizatio
     params = []
     conditions = []
     
-    # Organization filtering (always applied if provided)
+    # Organization filtering
     if organization_id is not None:
         conditions.append("organization_id = ?")
         params.append(organization_id)
     
-    # RBAC: Non-admins can only see their own data
+    # RBAC
     if user_role != 'admin' and user_id is not None:
         conditions.append("user_id = ?")
         params.append(user_id)
@@ -611,18 +807,8 @@ def get_all_transactions(filters=None, user_id=None, user_role=None, organizatio
     return df
 
 
-# ========== MODIFIED: GET USER-SPECIFIC TRANSACTIONS ==========
 def get_user_transactions(user_id, filters=None):
-    """
-    Get transactions for a specific user
-    
-    Args:
-        user_id: User ID to filter by
-        filters: Optional additional filters (department, severity)
-    
-    Returns:
-        DataFrame of user's transactions
-    """
+    """Get transactions for a specific user"""
     conn = get_connection()
     
     query = "SELECT * FROM transactions WHERE user_id = ?"
@@ -640,25 +826,14 @@ def get_user_transactions(user_id, filters=None):
     conn.close()
     
     return df
-# ========== END FUNCTION ==========
 
 
 # =====================================================
-# DASHBOARD SUMMARY - MODIFIED WITH RBAC AND ORGANIZATION
+# DASHBOARD SUMMARY
 # =====================================================
 
 def get_audit_summary(user_id=None, user_role=None, organization_id=None):
-    """
-    Get audit summary with RBAC and organization filtering
-    
-    Args:
-        user_id: Current user's ID
-        user_role: Current user's role
-        organization_id: Organization ID for multi-tenant filtering
-    
-    Returns:
-        Dictionary with summary metrics
-    """
+    """Get audit summary with RBAC and organization filtering"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -666,12 +841,10 @@ def get_audit_summary(user_id=None, user_role=None, organization_id=None):
     where_clauses = []
     params = []
     
-    # Organization filtering (always applied if provided)
     if organization_id is not None:
         where_clauses.append("organization_id = ?")
         params.append(organization_id)
     
-    # RBAC filtering
     if user_role != 'admin' and user_id is not None:
         where_clauses.append("user_id = ?")
         params.append(user_id)
@@ -742,26 +915,266 @@ def export_transactions_to_csv(filepath, filters=None):
 
 
 # =====================================================
-# MAINTENANCE
+# AUDIT CASES FUNCTIONS
 # =====================================================
 
-def clear_database():
+def insert_audit_cases(df: pd.DataFrame):
+    """
+    Insert or update audit cases from DataFrame.
+    Enhanced to include priority and due_date.
+    
+    Args:
+        df: DataFrame with audit case columns
+    """
+    if 'audit_case_id' not in df.columns:
+        return
+    
     conn = get_connection()
     cursor = conn.cursor()
     
-    cursor.execute("DELETE FROM audit_history")
-    cursor.execute("DELETE FROM audit_actions")
-    cursor.execute("DELETE FROM transactions")
-    # Note: We don't delete users or organizations tables for security reasons
+    # Filter rows that have case IDs
+    cases_df = df[df['audit_case_id'].notna()].copy()
+    
+    for _, row in cases_df.iterrows():
+        case_id = row.get('audit_case_id')
+        
+        if not case_id:
+            continue
+        
+        # Check if case exists
+        cursor.execute("SELECT case_id FROM audit_cases WHERE case_id = ?", (case_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            # Update existing case
+            cursor.execute("""
+                UPDATE audit_cases SET
+                    status = ?,
+                    case_priority = ?,
+                    assigned_to = ?,
+                    auditor_comment = ?,
+                    resolution = ?,
+                    due_date = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE case_id = ?
+            """, (
+                row.get('audit_status', 'Open'),
+                row.get('case_priority'),
+                row.get('assigned_to'),
+                row.get('auditor_comment', ''),
+                row.get('resolution', 'Pending'),
+                row.get('due_date'),
+                case_id
+            ))
+        else:
+            # Insert new case
+            cursor.execute("""
+                INSERT INTO audit_cases (
+                    case_id, transaction_id, status, case_priority, assigned_to, 
+                    auditor_comment, resolution, created_at, due_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                case_id,
+                int(row.get('transaction_id', 0)),
+                row.get('audit_status', 'Open'),
+                row.get('case_priority'),
+                row.get('assigned_to'),
+                row.get('auditor_comment', ''),
+                row.get('resolution', 'Pending'),
+                row.get('case_created_at', datetime.now().isoformat()),
+                row.get('due_date')
+            ))
     
     conn.commit()
     conn.close()
-    print("✓ Database cleared (users and organizations tables preserved)")
+
+
+def get_audit_cases(status_filter=None, priority_filter=None):
+    """
+    Get audit cases from database.
+    
+    Args:
+        status_filter: Optional status to filter by
+        priority_filter: Optional priority to filter by
+        
+    Returns:
+        DataFrame of audit cases
+    """
+    conn = get_connection()
+    
+    query = "SELECT * FROM audit_cases WHERE 1=1"
+    params = []
+    
+    if status_filter:
+        query += " AND status = ?"
+        params.append(status_filter)
+    
+    if priority_filter:
+        query += " AND case_priority = ?"
+        params.append(priority_filter)
+    
+    query += " ORDER BY created_at DESC"
+    
+    if params:
+        df = pd.read_sql_query(query, conn, params=params)
+    else:
+        df = pd.read_sql_query(query, conn)
+    
+    conn.close()
+    return df
+
+
+def get_overdue_cases_from_db():
+    """
+    Get overdue cases from database.
+    
+    Returns:
+        DataFrame of overdue cases
+    """
+    conn = get_connection()
+    
+    # Get all non-closed cases
+    query = """
+        SELECT * FROM audit_cases 
+        WHERE status != 'Closed' 
+        AND due_date IS NOT NULL
+        ORDER BY due_date ASC
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if len(df) == 0:
+        return df
+    
+    # Filter overdue
+    now = datetime.now()
+    overdue_mask = []
+    
+    for idx, row in df.iterrows():
+        try:
+            due_date = datetime.fromisoformat(row['due_date'])
+            overdue_mask.append(now > due_date)
+        except:
+            overdue_mask.append(False)
+    
+    return df[overdue_mask].copy()
+
+
+def update_audit_case(case_id: str, field: str, value):
+    """
+    Update a specific field of an audit case.
+    
+    Args:
+        case_id: Case ID to update
+        field: Field name to update
+        value: New value
+        
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    allowed_fields = ['status', 'case_priority', 'assigned_to', 'auditor_comment', 'resolution', 'due_date']
+    
+    if field not in allowed_fields:
+        return False, f"Field '{field}' cannot be updated"
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        query = f"UPDATE audit_cases SET {field} = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?"
+        cursor.execute(query, (value, case_id))
+        
+        conn.commit()
+        conn.close()
+        
+        return True, f"Case {case_id} updated successfully"
+    
+    except Exception as e:
+        return False, f"Error updating case: {str(e)}"
+
+
+def get_case_summary_from_db():
+    """
+    Get summary of audit cases from database.
+    Enhanced with priority and SLA metrics.
+    
+    Returns:
+        Dictionary with case counts
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT COUNT(*) FROM audit_cases")
+    total_cases = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT status, COUNT(*) FROM audit_cases GROUP BY status")
+    status_counts = dict(cursor.fetchall())
+    
+    cursor.execute("SELECT case_priority, COUNT(*) FROM audit_cases GROUP BY case_priority")
+    priority_counts = dict(cursor.fetchall())
+    
+    # Count overdue cases
+    cursor.execute("""
+        SELECT COUNT(*) FROM audit_cases 
+        WHERE status != 'Closed' 
+        AND due_date IS NOT NULL 
+        AND due_date < ?
+    """, (datetime.now().isoformat(),))
+    overdue_count = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    return {
+        'total_cases': total_cases,
+        'open_cases': status_counts.get('Open', 0),
+        'under_review': status_counts.get('Under Review', 0),
+        'escalated': status_counts.get('Escalated', 0),
+        'closed_cases': status_counts.get('Closed', 0),
+        'high_priority': priority_counts.get('High', 0),
+        'medium_priority': priority_counts.get('Medium', 0),
+        'low_priority': priority_counts.get('Low', 0),
+        'overdue_cases': overdue_count
+    }
 
 
 # =====================================================
-# INIT
+# MAINTENANCE
 # =====================================================
 
-if __name__ == "__main__":
-    init_database()
+def vacuum_database():
+    """Optimize database by running VACUUM"""
+    conn = get_connection()
+    conn.execute("VACUUM")
+    conn.close()
+
+
+def get_database_stats():
+    """Get database statistics"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT COUNT(*) FROM transactions")
+    trans_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM audit_actions")
+    actions_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM organizations")
+    orgs_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM audit_cases")
+    cases_count = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    return {
+        'transactions': trans_count,
+        'audit_actions': actions_count,
+        'users': users_count,
+        'organizations': orgs_count,
+        'audit_cases': cases_count
+    }
